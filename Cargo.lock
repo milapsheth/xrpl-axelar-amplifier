@@ -14255,6 +14255,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4d25c75bf9ea12c4040a97f829154768bbbce366287e2dc044af160cd79a13fd"
 
 [[package]]
+name = "xrpl-gateway"
+version = "0.1.0"
+dependencies = [
+ "axelar-wasm-std",
+ "axelar-wasm-std-derive",
+ "connection-router",
+ "cosmwasm-schema",
+ "cosmwasm-std",
+ "gateway",
+]
+
+[[package]]
 name = "yaml-rust"
 version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
