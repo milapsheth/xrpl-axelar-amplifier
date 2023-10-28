@@ -3,6 +3,7 @@ use cosmwasm_std::{
     to_binary, Deps, DepsMut, Env, MessageInfo, QueryRequest, Response, Storage, WasmQuery,
 };
 
+use cosmwasm_schema::cw_serde;
 use axelar_wasm_std::voting::{PollID, PollResult};
 use axelar_wasm_std::{
     nonempty, snapshot,
@@ -17,18 +18,115 @@ use crate::events::{
     PollEnded, PollMetadata, PollStarted, TxEventConfirmation, Voted, WorkerSetConfirmation,
 };
 use crate::execute::VerificationStatus::{Pending, Verified};
-use crate::msg::{EndPollResponse, VerifyMessagesResponse};
-use crate::query::is_message_verified;
-use crate::state;
+use crate::msg::{EndPollResponse, VerifyMessagesResponse, ConfirmMessageStatusesResponse};
+use crate::query::{is_message_verified, confirmed_message_status};
 use crate::state::{
+    self,
+    PENDING_MESSAGE_STATUSES,
     CONFIG, CONFIRMED_WORKER_SETS, PENDING_MESSAGES, PENDING_WORKER_SETS, POLLS, POLL_ID,
-    VERIFIED_MESSAGES,
+    VERIFIED_MESSAGES, MessageId, CONFIRMED_MESSAGE_STATUSES,
 };
 
 enum VerificationStatus {
     Verified(Message),
     Pending(Message),
 }
+
+#[cw_serde]
+pub enum MessageStatus {
+    Success,
+    Failure
+}
+
+pub fn confirm_message_statuses(
+    deps: DepsMut,
+    env: Env,
+    message_statuses: Vec<(MessageId, MessageStatus)>,
+) -> Result<Response, ContractError> {
+    if message_statuses.is_empty() {
+        Err(ContractError::EmptyMessages)?;
+    }
+
+    let source_chain = CONFIG.load(deps.storage)?.source_chain;
+
+    let config = CONFIG.load(deps.storage)?;
+
+    let confirmation_statuses: Vec<(MessageId, MessageStatus, Option<MessageStatus>)> = message_statuses
+        .into_iter()
+        .map(|tuple| {
+            let (message_id, status) = tuple;
+            confirmed_message_status(deps.as_ref(), &message_id)
+                .map(|res| (message_id, status, res))
+        }).collect::<Result<Vec<_>, ContractError>>()?;
+
+    let (mismatched, rest): (Vec<_>, Vec<_>) = confirmation_statuses
+        .into_iter()
+        .partition(|(_, status, confirmed_status)| {
+            match confirmed_status {
+                Some(confirmed_status) => confirmed_status != status,
+                None => false,
+            }});
+
+    let mismatched_message_ids = mismatched
+        .into_iter()
+        .map(|(message_id, _, _)| message_id)
+        .collect::<Vec<MessageId>>();
+
+    if !mismatched_message_ids.is_empty() {
+        return Err(ContractError::MessageStatusMismatch(mismatched_message_ids));
+    }
+
+    let confirmation_statuses = rest
+        .into_iter()
+        .map(|(message_id, status, confirmed_status)| {
+            (message_id, status, confirmed_status.is_some())
+        })
+        .collect::<Vec<(MessageId, MessageStatus, bool)>>();
+
+    let response = Response::new().set_data(to_binary(&ConfirmMessageStatusesResponse {
+        confirmation_statuses: confirmation_statuses.clone(),
+    })?);
+
+    let pending_message_statuses = confirmation_statuses
+        .into_iter()
+        .filter_map(|(message_id, status, confirmed)| match confirmed {
+            true => None,
+            false => Some((message_id, status)),
+        })
+        .collect::<Vec<(MessageId, MessageStatus)>>();
+
+    if pending_message_statuses.is_empty() {
+        return Ok(response);
+    }
+
+    let snapshot = take_snapshot(deps.as_ref(), &source_chain)?;
+    let participants = snapshot.get_participants();
+    let id = create_messages_poll(
+        deps.storage,
+        env.block.height,
+        config.block_expiry,
+        snapshot,
+        pending_message_statuses.len(),
+    )?;
+
+    PENDING_MESSAGE_STATUSES.save(deps.storage, id, &pending_message_statuses)?;
+
+    Ok(response.add_event(
+        PollStarted::MessageStatuses {
+            message_statuses: pending_message_statuses,
+            metadata: PollMetadata {
+                poll_id: id,
+                source_chain: config.source_chain,
+                source_gateway_address: config.source_gateway_address,
+                confirmation_height: config.confirmation_height,
+                expires_at: env.block.height + config.block_expiry,
+                participants,
+            },
+        }
+        .into(),
+    ))
+}
+
 
 pub fn confirm_worker_set(
     deps: DepsMut,
@@ -171,7 +269,7 @@ pub fn vote(
         .may_load(deps.storage, poll_id)?
         .ok_or(ContractError::PollNotFound)?;
     match &mut poll {
-        state::Poll::Messages(poll) | state::Poll::ConfirmWorkerSet(poll) => {
+        state::Poll::Messages(poll) | state::Poll::ConfirmWorkerSet(poll) | state::Poll::ConfirmMessageStatus(poll) => {
             poll.cast_vote(env.block.height, &info.sender, votes)?
         }
     };
@@ -185,6 +283,38 @@ pub fn vote(
         }
         .into(),
     ))
+}
+
+fn end_poll_message_statuses(
+    deps: DepsMut,
+    poll_id: PollID,
+    poll_result: &PollResult,
+) -> Result<(), ContractError> {
+    let message_statuses = remove_pending_message_statuses(deps.storage, poll_id)?;
+
+    assert_eq!(
+        message_statuses.len(),
+        poll_result.results.len(),
+        "poll {} results and pending messages have different length",
+        poll_id
+    );
+
+    let message_statuses = message_statuses
+        .iter()
+        .zip(poll_result.results.iter())
+        .filter_map(|((message_id, message_status), verified)| match *verified {
+            true => Some((message_id, message_status)),
+            false => None,
+        })
+        .collect::<Vec<(&MessageId, &MessageStatus)>>();
+
+    for (message_id, message_status) in message_statuses {
+        if confirmed_message_status(deps.as_ref(), &message_id)?.is_none() {
+            CONFIRMED_MESSAGE_STATUSES.save(deps.storage, &message_id, message_status)?;
+        }
+    }
+
+    Ok(())
 }
 
 fn end_poll_messages(
@@ -247,7 +377,7 @@ pub fn end_poll(deps: DepsMut, env: Env, poll_id: PollID) -> Result<Response, Co
         .ok_or(ContractError::PollNotFound)?;
 
     let poll_result = match &mut poll {
-        state::Poll::Messages(poll) | state::Poll::ConfirmWorkerSet(poll) => {
+        state::Poll::Messages(poll) | state::Poll::ConfirmWorkerSet(poll) | state::Poll::ConfirmMessageStatus(poll) => {
             poll.tally(env.block.height)?
         }
     };
@@ -258,6 +388,7 @@ pub fn end_poll(deps: DepsMut, env: Env, poll_id: PollID) -> Result<Response, Co
             end_poll_messages(deps, poll_id, &poll_result)?;
         }
         state::Poll::ConfirmWorkerSet(_) => end_poll_worker_set(deps, poll_id, &poll_result)?,
+        state::Poll::ConfirmMessageStatus(_) => end_poll_message_statuses(deps, poll_id, &poll_result)?,
     };
 
     Ok(Response::new()
@@ -324,6 +455,19 @@ fn create_messages_poll(
     POLLS.save(store, id, &state::Poll::Messages(poll))?;
 
     Ok(id)
+}
+
+fn remove_pending_message_statuses(
+    store: &mut dyn Storage,
+    poll_id: PollID,
+) -> Result<Vec<(MessageId, MessageStatus)>, ContractError> {
+    let pending_message_statuses = PENDING_MESSAGE_STATUSES
+        .may_load(store, poll_id)?
+        .ok_or(ContractError::PollNotFound)?;
+
+    PENDING_MESSAGE_STATUSES.remove(store, poll_id);
+
+    Ok(pending_message_statuses)
 }
 
 fn remove_pending_message(

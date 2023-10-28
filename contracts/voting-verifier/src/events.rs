@@ -9,7 +9,8 @@ use axelar_wasm_std::voting::PollID;
 use connection_router::state::{Address, ChainName, Message, ID_SEPARATOR};
 
 use crate::error::ContractError;
-use crate::state::Config;
+use crate::execute::MessageStatus;
+use crate::state::{Config, MessageId};
 
 impl From<Config> for Vec<Attribute> {
     fn from(other: Config) -> Self {
@@ -45,6 +46,10 @@ pub struct PollMetadata {
 pub enum PollStarted {
     Messages {
         messages: Vec<TxEventConfirmation>,
+        metadata: PollMetadata,
+    },
+    MessageStatuses {
+        message_statuses: Vec<(MessageId, MessageStatus)>,
         metadata: PollMetadata,
     },
     WorkerSet {
@@ -89,6 +94,15 @@ impl From<PollStarted> for Event {
                 .add_attribute(
                     "messages",
                     serde_json::to_string(&data).expect("failed to serialize messages"),
+                )
+                .add_attributes(Vec::<_>::from(metadata)),
+            PollStarted::MessageStatuses {
+                message_statuses: data,
+                metadata
+            } => Event::new("message_statuses_poll_started")
+                .add_attribute(
+                    "message_statuses",
+                    serde_json::to_string(&data).expect("failed to serialize message statuses"),
                 )
                 .add_attributes(Vec::<_>::from(metadata)),
             PollStarted::WorkerSet {

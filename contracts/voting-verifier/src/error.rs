@@ -6,6 +6,8 @@ use cosmwasm_std::StdError;
 use service_registry;
 use thiserror::Error;
 
+use crate::state::MessageId;
+
 #[derive(Error, Debug, PartialEq, IntoContractError)]
 pub enum ContractError {
     #[error(transparent)]
@@ -40,6 +42,10 @@ pub enum ContractError {
 
     #[error("worker set already confirmed")]
     WorkerSetAlreadyConfirmed,
+
+    // TODO: include message IDs of mismatched messages in error
+    #[error("message ids mismatch with confirmed message")]
+    MessageStatusMismatch(Vec<MessageId>),
 }
 
 impl From<ContractError> for StdError {
