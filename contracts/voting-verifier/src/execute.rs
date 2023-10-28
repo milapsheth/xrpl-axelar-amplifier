@@ -43,7 +43,10 @@ pub fn confirm_message_statuses(
     env: Env,
     message_statuses: Vec<(MessageId, MessageStatus)>,
 ) -> Result<Response, ContractError> {
+    // TODO: ensure there aren't multiple message ids with different statuses
+    // TODO: check if message_id 'corresponds' to a message that we've verified before
     if message_statuses.is_empty() {
+        // TODO: create separate EmptyMessageStatuses error
         Err(ContractError::EmptyMessages)?;
     }
 
@@ -101,7 +104,7 @@ pub fn confirm_message_statuses(
 
     let snapshot = take_snapshot(deps.as_ref(), &source_chain)?;
     let participants = snapshot.get_participants();
-    let id = create_messages_poll(
+    let id = create_message_statuses_poll(
         deps.storage,
         env.block.height,
         config.block_expiry,
@@ -453,6 +456,22 @@ fn create_messages_poll(
 
     let poll = WeightedPoll::new(id, snapshot, block_height + expiry, poll_size);
     POLLS.save(store, id, &state::Poll::Messages(poll))?;
+
+    Ok(id)
+}
+
+// TODO: merge 3 functions to single create_poll
+fn create_message_statuses_poll(
+    store: &mut dyn Storage,
+    block_height: u64,
+    expiry: u64,
+    snapshot: snapshot::Snapshot,
+    poll_size: usize,
+) -> Result<PollID, ContractError> {
+    let id = POLL_ID.incr(store)?;
+
+    let poll = WeightedPoll::new(id, snapshot, block_height + expiry, poll_size);
+    POLLS.save(store, id, &state::Poll::ConfirmMessageStatus(poll))?;
 
     Ok(id)
 }

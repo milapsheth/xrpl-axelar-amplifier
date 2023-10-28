@@ -71,6 +71,9 @@ pub enum QueryMsg {
     #[returns(Vec<(CrossChainId, bool)>)]
     IsVerified { messages: Vec<Message> },
 
+    #[returns(Vec<(MessageId, Option<MessageStatus>)>)]
+    IsConfirmed { message_ids: Vec<MessageId> },
+
     #[returns(bool)]
     IsWorkerSetConfirmed { new_operators: Operators },
 }

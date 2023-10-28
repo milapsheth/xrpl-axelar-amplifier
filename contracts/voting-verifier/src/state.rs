@@ -33,6 +33,7 @@ pub enum Poll {
 }
 
 #[cw_serde]
+#[derive(Eq, Hash)]
 pub struct MessageId(nonempty::String);
 
 impl fmt::Display for MessageId {

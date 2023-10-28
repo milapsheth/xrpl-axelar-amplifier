@@ -55,7 +55,9 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::IsVerified { messages } => {
             to_binary(&query::verification_statuses(deps, messages)?)
         }
-
+        QueryMsg::IsConfirmed { message_ids } => {
+            to_binary(&query::confirmation_statuses(deps, message_ids)?)
+        }
         QueryMsg::GetPoll { poll_id: _ } => {
             todo!()
         }
