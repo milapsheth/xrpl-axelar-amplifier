@@ -21,3 +21,5 @@ thiserror = { workspace = true }
 error-stack = { workspace = true }
 report = { workspace = true }
 serde_json = "1.0.89"
+sha2 = { version = "0.10.8" }
+cw-utils = "1.0.1"

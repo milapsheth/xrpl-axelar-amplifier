@@ -9,4 +9,10 @@ pub enum ContractError {
 
     #[error("invalid amount")]
     InvalidAmount,
+
+    #[error("serialization failed")]
+    SerializationFailed,
+
+    #[error("invalid contract reply: {reason}")]
+    InvalidContractReply { reason: String },
 }

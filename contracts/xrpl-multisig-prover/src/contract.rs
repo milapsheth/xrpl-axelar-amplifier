@@ -1,18 +1,22 @@
 #[cfg(not(feature = "library"))]
 use axelar_wasm_std::Threshold;
-use cosmwasm_schema::{cw_serde, serde::{Serializer, ser::SerializeStruct, Serialize, self}};
+use cosmwasm_schema::{cw_serde, serde::{Serializer, ser::SerializeStruct, Serialize}};
 use cosmwasm_std::{
-    entry_point, Storage, Uint128, Addr,
+    entry_point, Storage, Uint128, Addr, HexBinary, wasm_execute, SubMsg, Reply,
     to_binary, DepsMut, Env, MessageInfo, Response, QueryRequest, WasmQuery, QuerierWrapper,
 };
+use sha2::{Digest, Sha512};
 use serde_json;
 
 use crate::{
     error::ContractError,
-    state::{Config, CONFIG},
+    state::{Config, CONFIG, REPLY_TX_HASH, KEY_ID},
+    reply,
 };
 
 use connection_router::state::{Message, CrossChainId};
+
+pub const START_MULTISIG_REPLY_ID: u64 = 1;
 
 #[cw_serde]
 pub struct InstantiateMsg {
@@ -164,6 +168,17 @@ impl Serialize for XRPLUnsignedPaymentTransaction {
     }
 }
 
+pub const HASH_PREFIX_UNSIGNED_TRANSACTION_MULTI: [u8; 4] = [0x53, 0x4D, 0x54, 0x00];
+
+pub fn xrpl_hash(
+    prefix: [u8; 4],
+    unsigned_tx: &[u8],
+) -> [u8; 64] {
+    let mut hasher = Sha512::new_with_prefix(prefix);
+    hasher.update(unsigned_tx);
+    hasher.finalize().into()
+}
+
 pub fn construct_proof(
     querier: QuerierWrapper,
     storage: &mut dyn Storage,
@@ -174,17 +189,34 @@ pub fn construct_proof(
 ) -> Result<Response, ContractError> {
     let message = get_message(querier, message_id, config.gateway_address)?;
     let drops = u32::try_from(amount.u128() / 10u128.pow(12)).map_err(|_| ContractError::InvalidAmount)?;
+    // TODO: compute sequence/ticket number
     let unsigned_tx = XRPLUnsignedPaymentTransaction {
         account: config.xrpl_multisig_address.to_string(),
         fee: FEE,
         sequence: Sequence::Plain(0),
-        amount: XRPLPaymentAmount::Drops(drops),
+        amount: if denom == "uwasm" { XRPLPaymentAmount::Drops(drops) } else { XRPLPaymentAmount::Token(XRPLTokenAmount {
+            issuer: "".to_string(), // TODO: map denom to issuer
+            value: drops,
+            currency: denom, // TODO: map denom to currency
+        }) },
         destination: message.destination_address.to_string(),
         signing_pub_key: "".to_string(),
     };
     // TODO: implement XRPL encoding: https://xrpl.org/serialization.html
-    let encoded_unsigned_tx = serde_json::to_string(&unsigned_tx);
-    Ok(Response::default())
+    let encoded_unsigned_tx = serde_json::to_string(&unsigned_tx).map_err(|_| ContractError::SerializationFailed)?;
+
+    let tx_hash: HexBinary = HexBinary::from(xrpl_hash(HASH_PREFIX_UNSIGNED_TRANSACTION_MULTI, encoded_unsigned_tx.as_bytes()));
+    REPLY_TX_HASH.save(storage, &tx_hash)?;
+
+    let key_id = KEY_ID.load(storage)?;
+    let start_sig_msg = multisig::msg::ExecuteMsg::StartSigningSession {
+        key_id,
+        msg: tx_hash,
+    };
+
+    let wasm_msg = wasm_execute(config.axelar_multisig_address, &start_sig_msg, vec![])?;
+
+    Ok(Response::new().add_submessage(SubMsg::reply_on_success(wasm_msg, START_MULTISIG_REPLY_ID)))
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -209,6 +241,19 @@ pub fn execute(
     }?;
 
     Ok(res)
+}
+
+#[cfg_attr(not(feature = "library"), entry_point)]
+pub fn reply(
+    deps: DepsMut,
+    _env: Env,
+    reply: Reply,
+) -> Result<Response, axelar_wasm_std::ContractError> {
+    match reply.id {
+        START_MULTISIG_REPLY_ID => reply::start_multisig_reply(deps, reply),
+        _ => unreachable!("unknown reply ID"),
+    }
+    .map_err(axelar_wasm_std::ContractError::from)
 }
 
 #[cfg(test)]
