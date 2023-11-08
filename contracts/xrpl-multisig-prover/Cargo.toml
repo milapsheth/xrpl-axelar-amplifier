@@ -1,0 +1,23 @@
+[package]
+name = "xrpl-multisig-prover"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+cosmwasm-std = { workspace = true }
+cosmwasm-schema = { workspace = true }
+axelar-wasm-std = { workspace = true }
+axelar-wasm-std-derive = { workspace = true }
+cw-storage-plus = { workspace = true }
+connection-router = { workspace = true, features = ["library"] }
+multisig = { workspace = true, features = ["library"] }
+gateway = { workspace = true }
+thiserror = { workspace = true }
+error-stack = { workspace = true }
+report = { workspace = true }
+serde_json = "1.0.89"
