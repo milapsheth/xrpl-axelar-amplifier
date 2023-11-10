@@ -16,3 +16,9 @@ pub enum ContractError {
     #[error("invalid contract reply: {reason}")]
     InvalidContractReply { reason: String },
 }
+
+impl From<ContractError> for StdError {
+    fn from(value: ContractError) -> Self {
+        Self::generic_err(value.to_string())
+    }
+}

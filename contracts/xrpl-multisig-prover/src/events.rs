@@ -3,10 +3,11 @@ use std::collections::HashMap;
 use axelar_wasm_std::Snapshot;
 use cosmwasm_std::{HexBinary, Uint64};
 use serde_json::to_string;
+use crate::types::TxHash;
 
 pub enum Event {
     ProofUnderConstruction {
-        tx_hash: HexBinary,
+        tx_hash: TxHash,
         multisig_session_id: Uint64,
     },
     SnapshotRotated {

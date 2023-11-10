@@ -1,17 +1,20 @@
 #[cfg(not(feature = "library"))]
 use axelar_wasm_std::Threshold;
-use cosmwasm_schema::{cw_serde, serde::{Serializer, ser::SerializeStruct, Serialize}};
+use cosmwasm_schema::{cw_serde, serde::Serializer};
 use cosmwasm_std::{
     entry_point, Storage, Uint128, Addr, HexBinary, wasm_execute, SubMsg, Reply,
     to_binary, DepsMut, Env, MessageInfo, Response, QueryRequest, WasmQuery, QuerierWrapper,
 };
-use sha2::{Digest, Sha512};
+use bs58;
+use ripemd::Ripemd160;
+use sha2::{Sha256, Sha512, Digest};
 use serde_json;
 
 use crate::{
     error::ContractError,
-    state::{Config, CONFIG, REPLY_TX_HASH, KEY_ID},
+    state::{Config, CONFIG, REPLY_TX_HASH, KEY_ID, LAST_ASSIGNED_TICKET_NUMBER, AVAILABLE_TICKETS, TRANSACTION_INFO, TOKENS},
     reply,
+    types::*,
 };
 
 use connection_router::state::{Message, CrossChainId};
@@ -87,7 +90,7 @@ pub enum XRPLTransactionType {
     CreateTicket,
 }
 
-fn itoa_serialize<S>(x: &u32, s: S) -> Result<S::Ok, S::Error>
+fn itoa_serialize<S>(x: &u64, s: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
@@ -95,19 +98,19 @@ where
 }
 
 #[cw_serde]
-pub struct XRPLTokenAmount {
-    currency: String,
-    #[serde(serialize_with = "itoa_serialize")]
-    value: u32,
-    issuer: String,
-}
+pub struct XRPLTokenAmount(String);
 
+#[cw_serde]
+#[serde(untagged)]
 pub enum XRPLPaymentAmount {
-    Drops(u32),
-    Token(XRPLTokenAmount),
+    Drops(
+        #[serde(serialize_with = "itoa_serialize")]
+        u64,
+    ),
+    Token(XRPLToken, XRPLTokenAmount),
 }
 
-impl Serialize for XRPLPaymentAmount {
+/*impl Serialize for XRPLPaymentAmount {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -121,19 +124,23 @@ impl Serialize for XRPLPaymentAmount {
             }
         }
     }
-}
+}*/
 
 #[cw_serde]
+#[serde(untagged)]
 pub enum Sequence {
     Plain(u32),
     Ticket(u32),
 }
 
-const FEE: u32 = 12;
+const FEE: u64 = 12;
 
+#[cw_serde]
+#[serde(rename_all = "PascalCase")]
 pub struct XRPLUnsignedPaymentTransaction {
     account: String,
-    fee: u32,
+    #[serde(serialize_with = "itoa_serialize")]
+    fee: u64,
     sequence: Sequence,
     //LastLedgerSequence: Uint32,
     //Memos: vec<Memo>,
@@ -143,7 +150,73 @@ pub struct XRPLUnsignedPaymentTransaction {
     signing_pub_key: String,
 }
 
-impl Serialize for XRPLUnsignedPaymentTransaction {
+#[cw_serde]
+#[serde(rename_all = "PascalCase")]
+pub struct Signer {
+    pub account: String,
+    pub txn_signature: HexBinary,
+    pub signing_pub_key: HexBinary,
+}
+
+#[cw_serde]
+#[serde(rename_all = "PascalCase")]
+pub struct XRPLSignedPaymentTransaction {
+    #[serde(flatten)]
+    pub unsigned_tx: XRPLUnsignedPaymentTransaction,
+    pub signers: Vec<Signer>,
+}
+
+pub fn public_key_to_xrpl_address(public_key: multisig::key::PublicKey) -> String {
+    let public_key_hex: HexBinary = public_key.into();
+
+    assert!(public_key_hex.len() == 33);
+
+    let public_key_inner_hash = Sha256::digest(public_key_hex);
+    let account_id = Ripemd160::digest(public_key_inner_hash);
+
+    let address_type_prefix: &[u8] = &[0x00];
+    let payload = [address_type_prefix, &account_id].concat();
+
+    let checksum_hash1 = Sha256::digest(payload.clone());
+    let checksum_hash2 = Sha256::digest(checksum_hash1);
+    let checksum = &checksum_hash2[0..4];
+
+    bs58::encode([payload, checksum.to_vec()].concat())
+        .with_alphabet(bs58::Alphabet::RIPPLE)
+        .into_string()
+}
+
+impl XRPLSignedPaymentTransaction {
+    pub fn new(unsigned_tx: XRPLUnsignedPaymentTransaction, axelar_signers: Vec<(multisig::msg::Signer, multisig::key::Signature)>) -> Self {
+        let xrpl_signers: Vec<Signer> = axelar_signers
+            .iter()
+            .map(|(axelar_signer, signature)| {
+                let xrpl_address = public_key_to_xrpl_address(axelar_signer.pub_key.clone());
+                Signer {
+                    account: xrpl_address,
+                    signing_pub_key: axelar_signer.pub_key.clone().into(),
+                    txn_signature: HexBinary::from(signature.clone().as_ref())
+                }
+            })
+            .collect::<Vec<Signer>>();
+
+        Self {
+            unsigned_tx,
+            signers: xrpl_signers,
+        }
+    }
+}
+
+impl TryInto<HexBinary> for XRPLSignedPaymentTransaction {
+    type Error = ContractError;
+    fn try_into(self) -> Result<HexBinary, ContractError> {
+        Ok(HexBinary::from(serde_json::to_string(&self)
+            .map_err(|_| ContractError::SerializationFailed)?
+            .as_bytes()))
+    }
+}
+
+/*impl Serialize for XRPLUnsignedPaymentTransaction {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -166,7 +239,7 @@ impl Serialize for XRPLUnsignedPaymentTransaction {
         state.serialize_field("SigningPubKey", &self.signing_pub_key)?;
         state.end()
     }
-}
+}*/
 
 pub const HASH_PREFIX_UNSIGNED_TRANSACTION_MULTI: [u8; 4] = [0x53, 0x4D, 0x54, 0x00];
 
@@ -185,33 +258,57 @@ pub fn construct_proof(
     config: Config,
     message_id: CrossChainId,
     amount: Uint128,
-    denom: String,
+    token: XRPLToken,
 ) -> Result<Response, ContractError> {
-    let message = get_message(querier, message_id, config.gateway_address)?;
-    let drops = u32::try_from(amount.u128() / 10u128.pow(12)).map_err(|_| ContractError::InvalidAmount)?;
-    // TODO: compute sequence/ticket number
+    let last_assigned_ticket_number = LAST_ASSIGNED_TICKET_NUMBER.load(storage)?;
+    let available_tickets = AVAILABLE_TICKETS.load(storage)?;
+
+    // find next largest in available, otherwise use available_tickets[0]
+    let ticket_number = available_tickets.iter().find(|&x| x > &last_assigned_ticket_number).unwrap_or(&available_tickets[0]);
+
+    LAST_ASSIGNED_TICKET_NUMBER.save(storage, &(ticket_number + 1))?;
+
+    let message = get_message(querier, message_id.clone(), config.gateway_address)?;
+    let drops = u64::try_from(amount.u128() / 10u128.pow(12)).map_err(|_| ContractError::InvalidAmount)?;
     let unsigned_tx = XRPLUnsignedPaymentTransaction {
         account: config.xrpl_multisig_address.to_string(),
         fee: FEE,
-        sequence: Sequence::Plain(0),
-        amount: if denom == "uwasm" { XRPLPaymentAmount::Drops(drops) } else { XRPLPaymentAmount::Token(XRPLTokenAmount {
-            issuer: "".to_string(), // TODO: map denom to issuer
-            value: drops,
-            currency: denom, // TODO: map denom to currency
-        }) },
+        sequence: Sequence::Ticket(ticket_number.clone()), // TODO: add CreateTicket logic
+        amount: if token.currency == XRPLToken::NATIVE_CURRENCY {
+            XRPLPaymentAmount::Drops(drops)
+        } else {
+            XRPLPaymentAmount::Token(
+                XRPLToken {
+                    issuer: token.issuer,
+                    currency: token.currency,
+                },
+                XRPLTokenAmount(drops.to_string()),
+            )
+        },
         destination: message.destination_address.to_string(),
         signing_pub_key: "".to_string(),
     };
     // TODO: implement XRPL encoding: https://xrpl.org/serialization.html
     let encoded_unsigned_tx = serde_json::to_string(&unsigned_tx).map_err(|_| ContractError::SerializationFailed)?;
 
-    let tx_hash: HexBinary = HexBinary::from(xrpl_hash(HASH_PREFIX_UNSIGNED_TRANSACTION_MULTI, encoded_unsigned_tx.as_bytes()));
+    let tx_hash_hex: HexBinary = HexBinary::from(xrpl_hash(HASH_PREFIX_UNSIGNED_TRANSACTION_MULTI, encoded_unsigned_tx.as_bytes()));
+    let tx_hash: TxHash = TxHash(tx_hash_hex.clone());
     REPLY_TX_HASH.save(storage, &tx_hash)?;
+    TRANSACTION_INFO.save(
+        storage,
+        tx_hash,
+        &TransactionInfo {
+            sequence_number: ticket_number.clone(),
+            status: TransactionStatus::Pending,
+            unsigned_contents: unsigned_tx,
+            message_id,
+        }
+    )?;
 
     let key_id = KEY_ID.load(storage)?;
     let start_sig_msg = multisig::msg::ExecuteMsg::StartSigningSession {
         key_id,
-        msg: tx_hash,
+        msg: tx_hash_hex,
     };
 
     let wasm_msg = wasm_execute(config.axelar_multisig_address, &start_sig_msg, vec![])?;
@@ -226,17 +323,20 @@ pub fn execute(
     info: MessageInfo,
     msg: ExecuteMsg,
 ) -> Result<Response, axelar_wasm_std::ContractError> {
-    if info.funds.len() != 1 {
-        panic!("only one coin is allowed");
-    }
-
     let config = CONFIG.load(deps.storage)?;
+
+    // mapping AxelarToken -> XRPLToken
+    // mapping (axelar_denom => (xrpl_issuer, xrpl_currency))
 
     let res = match msg {
         ExecuteMsg::ConstructProof(message_id) => {
+            if info.funds.len() != 1 {
+                panic!("only one coin is allowed");
+            }
             let mut funds = info.funds;
             let coin = funds.remove(0);
-            construct_proof(deps.querier, deps.storage, config, message_id, coin.amount, coin.denom)
+            let xrpl_token = TOKENS.load(deps.storage, coin.denom.clone())?;
+            construct_proof(deps.querier, deps.storage, config, message_id, coin.amount, xrpl_token)
         },
     }?;
 
@@ -258,23 +358,57 @@ pub fn reply(
 
 #[cfg(test)]
 mod tests {
+    use multisig::key::PublicKey;
+
     use super::*;
 
     #[test]
-    fn serialize_xrpl_unsigned_payment_transaction() {
+    fn serialize_xrpl_unsigned_token_payment_transaction() {
         let unsigned_tx = XRPLUnsignedPaymentTransaction {
             account: "axelar1lsasewgqj7698e9a25v3c9kkzweee9cvejq5cs".to_string(),
             fee: FEE,
             sequence: Sequence::Plain(0),
-            amount: XRPLPaymentAmount::Token(XRPLTokenAmount {
-                currency: "USD".to_string(),
-                value: 100,
-                issuer: "axelar1lsasewgqj7698e9a25v3c9kkzweee9cvejq5cs".to_string(),
-            }),
+            amount: XRPLPaymentAmount::Token(
+                XRPLToken {
+                    currency: "USD".to_string(),
+                    issuer: "axelar1lsasewgqj7698e9a25v3c9kkzweee9cvejq5cs".to_string(),
+                },
+                XRPLTokenAmount("100".to_string()),
+            ),
             destination: "axelar1lsasewgqj7698e9a25v3c9kkzweee9cvejq5cs".to_string(),
             signing_pub_key: "".to_string(),
         };
         let encoded_unsigned_tx = serde_json::to_string(&unsigned_tx);
         println!("{}", encoded_unsigned_tx.unwrap());
+    }
+
+    #[test]
+    fn serialize_xrpl_unsigned_xrp_payment_transaction() {
+        let unsigned_tx = XRPLUnsignedPaymentTransaction {
+            account: "axelar1lsasewgqj7698e9a25v3c9kkzweee9cvejq5cs".to_string(),
+            fee: FEE,
+            sequence: Sequence::Plain(0),
+            amount: XRPLPaymentAmount::Drops(10),
+            destination: "axelar1lsasewgqj7698e9a25v3c9kkzweee9cvejq5cs".to_string(),
+            signing_pub_key: "".to_string(),
+        };
+        let encoded_unsigned_tx = serde_json::to_string(&unsigned_tx);
+        println!("{}", encoded_unsigned_tx.unwrap());
+    }
+
+    #[test]
+    fn ed25519_public_key_to_xrpl_address() {
+        assert_eq!(
+            public_key_to_xrpl_address(PublicKey::Ed25519(HexBinary::from(hex::decode("ED9434799226374926EDA3B54B1B461B4ABF7237962EAE18528FEA67595397FA32").unwrap()))),
+            "rDTXLQ7ZKZVKz33zJbHjgVShjsBnqMBhmN"
+        );
+    }
+
+    #[test]
+    fn secp256k1_public_key_to_xrpl_address() {
+        assert_eq!(
+            public_key_to_xrpl_address(PublicKey::Ecdsa(HexBinary::from(hex::decode("0303E20EC6B4A39A629815AE02C0A1393B9225E3B890CAE45B59F42FA29BE9668D").unwrap()))),
+            "rnBFvgZphmN39GWzUJeUitaP22Fr9be75H"
+        );
     }
 }
