@@ -1,11 +1,10 @@
 use axelar_wasm_std::{Participant, Snapshot};
-use connection_router::state::CrossChainId;
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{from_binary, HexBinary, StdResult, Uint256};
 use cw_storage_plus::{Key, KeyDeserialize, PrimaryKey};
 use multisig::key::{PublicKey, Signature};
 
-use crate::contract::XRPLUnsignedPaymentTransaction;
+use crate::contract::XRPLUnsignedTx;
 
 #[cw_serde]
 pub enum TransactionStatus {
@@ -19,10 +18,9 @@ pub struct TxHash(pub HexBinary);
 
 #[cw_serde]
 pub struct TransactionInfo {
-    pub sequence_number: u32,
     pub status: TransactionStatus,
-    pub unsigned_contents: XRPLUnsignedPaymentTransaction,
-    pub message_id: CrossChainId,
+    // TODO: save the hash of the transaction
+    pub unsigned_contents: XRPLUnsignedTx,
 }
 
 impl From<HexBinary> for TxHash {

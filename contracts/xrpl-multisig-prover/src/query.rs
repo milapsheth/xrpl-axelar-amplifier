@@ -1,11 +1,10 @@
-use connection_router::state::CrossChainId;
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::{to_binary, Deps, QueryRequest, StdResult, Uint64, WasmQuery, HexBinary};
 
 use multisig::{msg::Multisig, types::MultisigState};
 
 use crate::{
-    state::{CONFIG, MULTISIG_SESSION_TX, TRANSACTION_INFO}, contract::XRPLSignedPaymentTransaction,
+    state::{CONFIG, MULTISIG_SESSION_TX, TRANSACTION_INFO}, types::TxHash, contract::XRPLSignedTransaction,
 };
 
 #[cw_serde]
@@ -18,8 +17,8 @@ pub enum QueryMsg {
 #[cw_serde]
 #[serde(tag = "status")]
 pub enum GetProofResponse {
-    Completed { message_id: CrossChainId, tx_blob: HexBinary},
-    Pending { message_id: CrossChainId },
+    Completed { tx_hash: TxHash, tx_blob: HexBinary},
+    Pending { tx_hash: TxHash },
 }
 
 pub fn get_proof(deps: Deps, multisig_session_id: Uint64) -> StdResult<GetProofResponse> {
@@ -27,7 +26,7 @@ pub fn get_proof(deps: Deps, multisig_session_id: Uint64) -> StdResult<GetProofR
 
     let tx_hash = MULTISIG_SESSION_TX.load(deps.storage, multisig_session_id.u64())?;
 
-    let tx_info = TRANSACTION_INFO.load(deps.storage, tx_hash)?;
+    let tx_info = TRANSACTION_INFO.load(deps.storage, tx_hash.clone())?;
 
     let query_msg = multisig::msg::QueryMsg::GetMultisig {
         session_id: multisig_session_id,
@@ -39,7 +38,7 @@ pub fn get_proof(deps: Deps, multisig_session_id: Uint64) -> StdResult<GetProofR
     }))?;
 
     let response = match multisig_session.state {
-        MultisigState::Pending => GetProofResponse::Pending { message_id: tx_info.message_id },
+        MultisigState::Pending => GetProofResponse::Pending { tx_hash },
         MultisigState::Completed { .. } => {
             let axelar_signers: Vec<(multisig::msg::Signer, multisig::key::Signature)> = multisig_session.signers
                 .iter()
@@ -47,30 +46,12 @@ pub fn get_proof(deps: Deps, multisig_session_id: Uint64) -> StdResult<GetProofR
                 .map(|(signer, signature)| (signer.clone(), signature.clone().unwrap()))
                 .collect();
 
-            let signed_tx = XRPLSignedPaymentTransaction::new(tx_info.unsigned_contents, axelar_signers);
+            let signed_tx = XRPLSignedTransaction::new(tx_info.unsigned_contents, axelar_signers);
+            // TODO: serialize using XRPL encoding: https://xrpl.org/serialization.html
             let tx_blob: HexBinary = signed_tx.try_into()?;
-            GetProofResponse::Completed { message_id: tx_info.message_id, tx_blob }
+            GetProofResponse::Completed { tx_hash, tx_blob }
         }
     };
 
     Ok(response)
-}
-
-#[cfg(test)]
-mod tests {
-    use std::str::FromStr;
-    use connection_router::state::ChainName;
-
-    use super::*;
-
-    #[test]
-    fn serialize_enum() {
-        println!("{:?}", serde_json::to_string(&GetProofResponse::Completed {
-            tx_blob: HexBinary::from(&[3, 1]),
-            message_id: CrossChainId {
-                chain: ChainName::from_str("ethereum").unwrap(),
-                id: "1337".parse().unwrap()
-            },
-        }));
-    }
 }

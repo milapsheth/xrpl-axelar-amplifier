@@ -1,19 +1,27 @@
-use axelar_wasm_std::Threshold;
-use cosmwasm_std::Addr;
+use std::{num::NonZeroU32, collections::BTreeSet};
+
+use axelar_wasm_std::{Participant, nonempty::Uint256};
+use cosmwasm_std::{Addr, HexBinary};
 use cw_storage_plus::{Item, Map};
 use cosmwasm_schema::cw_serde;
-use crate::types::{TransactionInfo, TxHash, XRPLToken};
+use multisig::{key::PublicKey, msg::Signer};
+use service_registry::state::Worker;
+use sha3::{Digest, Keccak256};
+use crate::{types::{TransactionInfo, TxHash, XRPLToken}, error::ContractError};
 
 #[cw_serde]
 pub struct Config {
     pub axelar_multisig_address: Addr,
     pub gateway_address: Addr,
-    pub signing_threshold: Threshold,
+    pub signing_quorum: NonZeroU32,
     pub xrpl_multisig_address: Addr,
+    pub voting_verifier_address: Addr,
+    pub service_registry_address: Addr,
+    pub service_name: String,
+    pub worker_set_diff_threshold: u32,
 }
 
 pub const CONFIG: Item<Config> = Item::new("config");
-pub const KEY_ID: Item<String> = Item::new("key_id");
 pub const REPLY_TX_HASH: Item<TxHash> = Item::new("reply_tx_hash");
 pub const MULTISIG_SESSION_TX: Map<u64, TxHash> = Map::new("multisig_session_tx");
 
@@ -23,3 +31,48 @@ pub const AVAILABLE_TICKETS: Item<Vec<u32>> = Item::new("available_tickets");
 pub const TRANSACTION_INFO: Map<TxHash, TransactionInfo> = Map::new("transaction_info");
 
 pub const TOKENS: Map<String, XRPLToken> = Map::new("tokens");
+
+#[cw_serde]
+pub struct WorkerSet {
+    pub signers: BTreeSet<Signer>,
+    pub threshold: Uint256,
+    // for hash uniqueness. The same exact worker set could be in use at two different times,
+    // and we need to be able to distinguish between the two
+    pub created_at: u64,
+}
+
+impl WorkerSet {
+    pub fn new(
+        participants: Vec<(Participant, PublicKey)>,
+        threshold: Uint256,
+        block_height: u64,
+    ) -> Self {
+        let signers = participants
+            .into_iter()
+            .map(|(participant, pub_key)| Signer {
+                address: participant.address.clone(),
+                weight: participant.weight.into(),
+                pub_key,
+            })
+            .collect();
+
+        WorkerSet {
+            signers,
+            threshold,
+            created_at: block_height,
+        }
+    }
+
+    pub fn hash(&self) -> HexBinary {
+        Keccak256::digest(serde_json::to_vec(&self).expect("couldn't serialize worker set"))
+            .as_slice()
+            .into()
+    }
+
+    pub fn id(&self) -> String {
+        self.hash().to_hex()
+    }
+}
+
+pub const CURRENT_WORKER_SET: Item<WorkerSet> = Item::new("current_worker_set");
+pub const NEXT_WORKER_SET: Map<TxHash, (WorkerSet, Uint256)> = Map::new("next_worker_set");
