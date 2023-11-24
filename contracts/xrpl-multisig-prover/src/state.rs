@@ -5,9 +5,8 @@ use cosmwasm_std::{Addr, HexBinary};
 use cw_storage_plus::{Item, Map};
 use cosmwasm_schema::cw_serde;
 use multisig::{key::PublicKey, msg::Signer};
-use service_registry::state::Worker;
 use sha3::{Digest, Keccak256};
-use crate::{types::{TransactionInfo, TxHash, XRPLToken}, error::ContractError};
+use crate::types::{TransactionInfo, TxHash, XRPLToken};
 
 #[cw_serde]
 pub struct Config {

@@ -417,6 +417,133 @@ pub enum XRPLMessage {
     TrustSet(), // TODO: https://xrpl.org/trustset.html
 }
 
+fn construct_payment_proof(
+    deps: DepsMut,
+    info: MessageInfo,
+    config: Config,
+    message_id: CrossChainId,
+) -> Result<Response, ContractError> {
+    if info.funds.len() != 1 {
+        panic!("only one coin is allowed");
+    }
+
+    let mut funds = info.funds;
+    let coin = funds.remove(0);
+    let xrpl_token = TOKENS.load(deps.storage, coin.denom.clone())?;
+    let message = get_message(deps.querier, message_id.clone(), config.gateway_address.clone())?;
+    let drops = u64::try_from(coin.amount.u128() / 10u128.pow(12)).map_err(|_| ContractError::InvalidAmount)?;
+    let partial_unsigned_tx = XRPLPartialTx::Payment {
+        amount: if xrpl_token.currency == XRPLToken::NATIVE_CURRENCY {
+            XRPLPaymentAmount::Drops(drops)
+        } else {
+            XRPLPaymentAmount::Token(
+                XRPLToken {
+                    issuer: xrpl_token.issuer,
+                    currency: xrpl_token.currency,
+                },
+                XRPLTokenAmount(drops.to_string()),
+            )
+        },
+        destination: message.destination_address.to_string(),
+    };
+
+    Ok(
+        construct_proof(
+            deps.storage,
+            config,
+            partial_unsigned_tx
+        )?.0
+    )
+}
+
+fn construct_signer_list_set_proof(
+    deps: DepsMut,
+    env: Env,
+    config: Config,
+) -> Result<Response, ContractError> {
+    let workers_info = get_workers_info(deps.querier, &config)?;
+    if !CURRENT_WORKER_SET.exists(deps.storage) {
+        let new_worker_set = WorkerSet::new(
+            workers_info.pubkeys_by_participant.clone(),
+            workers_info.snapshot.quorum.into(),
+            env.block.height,
+        );
+
+        CURRENT_WORKER_SET.save(deps.storage, &new_worker_set)?;
+        let key_gen_msg =  multisig::msg::ExecuteMsg::KeyGen {
+            key_id: new_worker_set.id(),
+            snapshot: workers_info.snapshot,
+            pub_keys_by_address: workers_info
+                .pubkeys_by_participant
+                .clone()
+                .into_iter()
+                .map(|(participant, pub_key)| {
+                    (
+                        participant.address.to_string(),
+                        (KeyType::Ecdsa, pub_key.as_ref().into()),
+                    )
+                })
+                .collect(),
+        };
+
+        return Ok(Response::new().add_message(wasm_execute(config.axelar_multisig_address, &key_gen_msg, vec![])?));
+    }
+
+    let partial_unsigned_tx = XRPLPartialTx::SignerListSet {
+        signer_quorum: config.signing_quorum,
+        signer_entries: make_xrpl_signer_entries(workers_info.pubkeys_by_participant.clone()),
+    };
+
+    let new_worker_set = WorkerSet::new(
+        workers_info.pubkeys_by_participant,
+        workers_info.snapshot.quorum.into(),
+        env.block.height,
+    );
+
+    let cur_worker_set = CURRENT_WORKER_SET.load(deps.storage)?;
+    if should_update_worker_set(
+        &new_worker_set,
+        &cur_worker_set,
+        config.worker_set_diff_threshold as usize,
+    ) {
+        return Err(ContractError::WorkerSetUnchanged.into())
+    }
+
+    let (response, tx_hash) = construct_proof(deps.storage, config, partial_unsigned_tx)?;
+    NEXT_WORKER_SET.save(deps.storage, tx_hash, &(new_worker_set, workers_info.snapshot.quorum))?;
+    Ok(response)
+}
+
+fn update_tx_status(
+    storage: &mut dyn Storage,
+    sender: Addr,
+    voting_verifier_address: Addr,
+    tx_hash: TxHash,
+    status: bool,
+) -> Result<Response, ContractError> {
+    // TODO: allow any sender to call, but query the voting verifier
+    // to get the status
+    if sender != voting_verifier_address {
+        return Err(ContractError::Unauthorized);
+    }
+
+    let mut tx_info = TRANSACTION_INFO.load(storage, tx_hash.clone())?;
+    tx_info.status = if status { TransactionStatus::Succeeded } else { TransactionStatus::Failed };
+    TRANSACTION_INFO.save(storage, tx_hash, &tx_info)?;
+    AVAILABLE_TICKETS.update(storage, |tickets| -> Result<_, ContractError> {
+        let new_available_tickets: Vec<u32> = tickets
+            .iter()
+            .filter(|&x| {
+                let sequence_number: u32 = tx_info.unsigned_contents.common.sequence.clone().into();
+                *x != sequence_number
+            })
+            .cloned()
+            .collect();
+        Ok(new_available_tickets)
+    })?;
+    Ok(Response::default())
+}
+
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn execute(
     deps: DepsMut,
@@ -428,112 +555,19 @@ pub fn execute(
 
     let res = match msg {
         ExecuteMsg::ConstructProof(message_id) => {
-            if info.funds.len() != 1 {
-                panic!("only one coin is allowed");
-            }
-            let mut funds = info.funds;
-            let coin = funds.remove(0);
-            let xrpl_token = TOKENS.load(deps.storage, coin.denom.clone())?;
-            let message = get_message(deps.querier, message_id.clone(), config.gateway_address.clone())?;
-            let drops = u64::try_from(coin.amount.u128() / 10u128.pow(12)).map_err(|_| ContractError::InvalidAmount)?;
-            let partial_unsigned_tx = XRPLPartialTx::Payment {
-                amount: if xrpl_token.currency == XRPLToken::NATIVE_CURRENCY {
-                    XRPLPaymentAmount::Drops(drops)
-                } else {
-                    XRPLPaymentAmount::Token(
-                        XRPLToken {
-                            issuer: xrpl_token.issuer,
-                            currency: xrpl_token.currency,
-                        },
-                        XRPLTokenAmount(drops.to_string()),
-                    )
-                },
-                destination: message.destination_address.to_string(),
-            };
-
-            Ok::<Response, ContractError>(
-                construct_proof(
-                    deps.storage,
-                    config,
-                    partial_unsigned_tx
-                )?.0
-            )
+            construct_payment_proof(deps, info, config, message_id)
         },
         ExecuteMsg::UpdateWorkerSet {} => {
-            let workers_info = get_workers_info(deps.querier, &config)?;
-            if !CURRENT_WORKER_SET.exists(deps.storage) {
-                let new_worker_set = WorkerSet::new(
-                    workers_info.pubkeys_by_participant.clone(),
-                    workers_info.snapshot.quorum.into(),
-                    env.block.height,
-                );
-
-                CURRENT_WORKER_SET.save(deps.storage, &new_worker_set)?;
-                let key_gen_msg =  multisig::msg::ExecuteMsg::KeyGen {
-                    key_id: new_worker_set.id(),
-                    snapshot: workers_info.snapshot,
-                    pub_keys_by_address: workers_info
-                        .pubkeys_by_participant
-                        .clone()
-                        .into_iter()
-                        .map(|(participant, pub_key)| {
-                            (
-                                participant.address.to_string(),
-                                (KeyType::Ecdsa, pub_key.as_ref().into()),
-                            )
-                        })
-                        .collect(),
-                };
-
-                return Ok(Response::new().add_message(wasm_execute(config.axelar_multisig_address, &key_gen_msg, vec![])?));
-            }
-
-            let partial_unsigned_tx = XRPLPartialTx::SignerListSet {
-                signer_quorum: config.signing_quorum,
-                signer_entries: make_xrpl_signer_entries(workers_info.pubkeys_by_participant.clone()),
-            };
-
-            let new_worker_set = WorkerSet::new(
-                workers_info.pubkeys_by_participant,
-                workers_info.snapshot.quorum.into(),
-                env.block.height,
-            );
-
-            let cur_worker_set = CURRENT_WORKER_SET.load(deps.storage)?;
-            if should_update_worker_set(
-                &new_worker_set,
-                &cur_worker_set,
-                config.worker_set_diff_threshold as usize,
-            ) {
-                return Err(ContractError::WorkerSetUnchanged.into())
-            }
-
-            let (response, tx_hash) = construct_proof(deps.storage, config, partial_unsigned_tx)?;
-            NEXT_WORKER_SET.save(deps.storage, tx_hash, &(new_worker_set, workers_info.snapshot.quorum))?;
-            Ok(response)
+            construct_signer_list_set_proof(deps, env, config)
         },
         ExecuteMsg::UpdateTxStatus(tx_hash, status) => {
-            // TODO: allow any sender to call, but query the voting verifier
-            // to get the status
-            if info.sender != config.voting_verifier_address {
-                return Err(ContractError::Unauthorized.into());
-            }
-
-            let mut tx_info = TRANSACTION_INFO.load(deps.storage, tx_hash.clone())?;
-            tx_info.status = if status { TransactionStatus::Succeeded } else { TransactionStatus::Failed };
-            TRANSACTION_INFO.save(deps.storage, tx_hash, &tx_info)?;
-            AVAILABLE_TICKETS.update(deps.storage, |tickets| -> Result<_, ContractError> {
-                let new_available_tickets: Vec<u32> = tickets
-                    .iter()
-                    .filter(|&x| {
-                        let sequence_number: u32 = tx_info.unsigned_contents.common.sequence.clone().into();
-                        *x != sequence_number
-                    })
-                    .cloned()
-                    .collect();
-                Ok(new_available_tickets)
-            })?;
-            Ok(Response::default())
+            update_tx_status(
+                deps.storage,
+                info.sender,
+                config.voting_verifier_address,
+                tx_hash,
+                status
+            )
         },
     }?;
 
