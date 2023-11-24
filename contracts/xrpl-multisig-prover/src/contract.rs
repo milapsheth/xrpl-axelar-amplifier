@@ -36,6 +36,7 @@ pub struct InstantiateMsg {
     service_registry_address: String,
     service_name: String,
     worker_set_diff_threshold: u32,
+    xrpl_fee: u64,
 }
 
 #[cw_serde]
@@ -73,6 +74,7 @@ pub fn instantiate(
         service_registry_address,
         service_name: msg.service_name,
         worker_set_diff_threshold: msg.worker_set_diff_threshold,
+        xrpl_fee: msg.xrpl_fee,
     };
 
     CONFIG.save(deps.storage, &config)?;
@@ -152,8 +154,6 @@ impl Into<u32> for Sequence {
         }
     }
 }
-
-const FEE: u64 = 12;
 
 #[cw_serde]
 pub enum XRPLTransactionType {
@@ -371,7 +371,7 @@ pub fn construct_proof(
 
     let unsigned_tx_common = XRPLTxCommonFields {
         account: config.xrpl_multisig_address.to_string(),
-        fee: FEE,
+        fee: config.xrpl_fee,
         sequence: Sequence::Ticket(ticket_number.clone()),
         signing_pub_key: "".to_string(),
     };

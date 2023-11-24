@@ -18,6 +18,7 @@ pub struct Config {
     pub service_registry_address: Addr,
     pub service_name: String,
     pub worker_set_diff_threshold: u32,
+    pub xrpl_fee: u64,
 }
 
 pub const CONFIG: Item<Config> = Item::new("config");
