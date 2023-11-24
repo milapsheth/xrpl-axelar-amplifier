@@ -37,13 +37,14 @@ pub struct InstantiateMsg {
     service_name: String,
     worker_set_diff_threshold: u32,
     xrpl_fee: u64,
+    last_ledger_sequence_offset: u32,
 }
 
 #[cw_serde]
 pub enum ExecuteMsg {
-    ConstructProof(CrossChainId),
+    ConstructProof(CrossChainId, u32),
     UpdateTxStatus(TxHash, bool),
-    UpdateWorkerSet(),
+    UpdateWorkerSet(u32),
 }
 
 #[cw_serde]
@@ -75,6 +76,7 @@ pub fn instantiate(
         service_name: msg.service_name,
         worker_set_diff_threshold: msg.worker_set_diff_threshold,
         xrpl_fee: msg.xrpl_fee,
+        last_ledger_sequence_offset: msg.last_ledger_sequence_offset,
     };
 
     CONFIG.save(deps.storage, &config)?;
@@ -171,6 +173,7 @@ pub struct XRPLTxCommonFields {
     fee: u64,
     sequence: Sequence,
     signing_pub_key: String,
+    last_ledger_sequence: u32,
 }
 
 #[cw_serde]
@@ -365,6 +368,7 @@ pub fn construct_proof(
     storage: &mut dyn Storage,
     config: Config,
     partial_tx: XRPLPartialTx,
+    latest_ledger_index: u32,
 ) -> Result<(Response, TxHash), ContractError> {
     let ticket_number = get_next_ticket_number(storage)?;
     LAST_ASSIGNED_TICKET_NUMBER.save(storage, &(ticket_number + 1))?;
@@ -374,6 +378,7 @@ pub fn construct_proof(
         fee: config.xrpl_fee,
         sequence: Sequence::Ticket(ticket_number.clone()),
         signing_pub_key: "".to_string(),
+        last_ledger_sequence: latest_ledger_index + config.last_ledger_sequence_offset,
     };
 
     let unsigned_tx = XRPLUnsignedTx {
@@ -422,6 +427,7 @@ fn construct_payment_proof(
     info: MessageInfo,
     config: Config,
     message_id: CrossChainId,
+    latest_ledger_index: u32,
 ) -> Result<Response, ContractError> {
     if info.funds.len() != 1 {
         panic!("only one coin is allowed");
@@ -451,7 +457,8 @@ fn construct_payment_proof(
         construct_proof(
             deps.storage,
             config,
-            partial_unsigned_tx
+            partial_unsigned_tx,
+            latest_ledger_index,
         )?.0
     )
 }
@@ -460,6 +467,7 @@ fn construct_signer_list_set_proof(
     deps: DepsMut,
     env: Env,
     config: Config,
+    latest_ledger_index: u32,
 ) -> Result<Response, ContractError> {
     let workers_info = get_workers_info(deps.querier, &config)?;
     if !CURRENT_WORKER_SET.exists(deps.storage) {
@@ -509,7 +517,7 @@ fn construct_signer_list_set_proof(
         return Err(ContractError::WorkerSetUnchanged.into())
     }
 
-    let (response, tx_hash) = construct_proof(deps.storage, config, partial_unsigned_tx)?;
+    let (response, tx_hash) = construct_proof(deps.storage, config, partial_unsigned_tx, latest_ledger_index)?;
     NEXT_WORKER_SET.save(deps.storage, tx_hash, &(new_worker_set, workers_info.snapshot.quorum))?;
     Ok(response)
 }
@@ -554,11 +562,11 @@ pub fn execute(
     let config = CONFIG.load(deps.storage)?;
 
     let res = match msg {
-        ExecuteMsg::ConstructProof(message_id) => {
-            construct_payment_proof(deps, info, config, message_id)
+        ExecuteMsg::ConstructProof(message_id, latest_ledger_index) => {
+            construct_payment_proof(deps, info, config, message_id, latest_ledger_index)
         },
-        ExecuteMsg::UpdateWorkerSet {} => {
-            construct_signer_list_set_proof(deps, env, config)
+        ExecuteMsg::UpdateWorkerSet(latest_ledger_index) => {
+            construct_signer_list_set_proof(deps, env, config, latest_ledger_index)
         },
         ExecuteMsg::UpdateTxStatus(tx_hash, status) => {
             update_tx_status(

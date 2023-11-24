@@ -19,6 +19,7 @@ pub struct Config {
     pub service_name: String,
     pub worker_set_diff_threshold: u32,
     pub xrpl_fee: u64,
+    pub last_ledger_sequence_offset: u32,
 }
 
 pub const CONFIG: Item<Config> = Item::new("config");
