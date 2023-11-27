@@ -1,8 +1,9 @@
-use axelar_wasm_std::{Participant, Snapshot};
+use axelar_wasm_std::{Participant, Snapshot, nonempty};
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{from_binary, HexBinary, StdResult, Uint256};
 use cw_storage_plus::{Key, KeyDeserialize, PrimaryKey};
 use multisig::key::{PublicKey, Signature};
+use voting_verifier::{state::MessageId, execute::MessageStatus};
 
 use crate::contract::XRPLUnsignedTx;
 
@@ -10,11 +11,28 @@ use crate::contract::XRPLUnsignedTx;
 pub enum TransactionStatus {
     Pending,
     Succeeded,
-    Failed,
+    FailedOnChain,
+    FailedOffChain,
 }
 
 #[cw_serde]
 pub struct TxHash(pub HexBinary);
+
+impl Into<MessageId> for TxHash {
+    fn into(self) -> MessageId {
+        MessageId(nonempty::String::try_from(self.0.to_hex()).unwrap())
+    }
+}
+
+impl Into<TransactionStatus> for MessageStatus {
+    fn into(self) -> TransactionStatus {
+        match self {
+            MessageStatus::Success => TransactionStatus::Succeeded,
+            MessageStatus::FailureOnChain => TransactionStatus::FailedOnChain,
+            MessageStatus::FailureOffChain => TransactionStatus::FailedOffChain,
+        }
+    }
+}
 
 #[cw_serde]
 pub struct TransactionInfo {

@@ -35,7 +35,8 @@ enum VerificationStatus {
 #[cw_serde]
 pub enum MessageStatus {
     Success,
-    Failure
+    FailureOnChain,
+    FailureOffChain,
 }
 
 pub fn confirm_message_statuses(

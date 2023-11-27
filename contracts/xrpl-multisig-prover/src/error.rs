@@ -31,6 +31,21 @@ pub enum ContractError {
 
     #[error("worker set has not changed sufficiently since last update")]
     WorkerSetUnchanged,
+
+    #[error("ticket count threshold has not been reached")]
+    TicketCountThresholdNotReached,
+
+    #[error("transaction status is already updated")]
+    TransactionStatusAlreadyUpdated,
+
+    #[error("previous ticket create transaction is pending")]
+    PreviousTicketCreateTxPending,
+
+    #[error("invalid transaction status")]
+    InvalidTransactionStatus,
+
+    #[error("transaction has not been confirmed")]
+    TransactionStatusNotConfirmed,
 }
 
 impl From<ContractError> for StdError {

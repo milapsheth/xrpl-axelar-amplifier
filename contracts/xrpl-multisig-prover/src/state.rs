@@ -20,16 +20,25 @@ pub struct Config {
     pub worker_set_diff_threshold: u32,
     pub xrpl_fee: u64,
     pub last_ledger_sequence_offset: u32,
+    pub ticket_count_threshold: u32,
 }
 
 pub const CONFIG: Item<Config> = Item::new("config");
 pub const REPLY_TX_HASH: Item<TxHash> = Item::new("reply_tx_hash");
 pub const MULTISIG_SESSION_TX: Map<u64, TxHash> = Map::new("multisig_session_tx");
 
+// The next seq. no. is determined on TicketCreate and depends on the number of created tickets,
+// not solely on the last sequence number used.
+// On the contrary, the next ticket number to be used cannot be determined before proof construction,
+// as it depends on the tickets available at the time.
+// After all ticket numbers are used, we reuse the smallest available ticket number,
+// going over all ticket numbers again, wrapping around.
 pub const NEXT_SEQUENCE_NUMBER: Item<u32> = Item::new("next_sequence_number");
 pub const LAST_ASSIGNED_TICKET_NUMBER: Item<u32> = Item::new("last_assigned_ticket_number");
+
 pub const AVAILABLE_TICKETS: Item<Vec<u32>> = Item::new("available_tickets");
 pub const TRANSACTION_INFO: Map<TxHash, TransactionInfo> = Map::new("transaction_info");
+pub const LATEST_TICKET_CREATE_TX_HASH: Item<TxHash> = Item::new("latest_ticket_create_tx_hash");
 
 pub const TOKENS: Map<String, XRPLToken> = Map::new("tokens");
 

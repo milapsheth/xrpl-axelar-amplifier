@@ -34,7 +34,7 @@ pub enum Poll {
 
 #[cw_serde]
 #[derive(Eq, Hash)]
-pub struct MessageId(nonempty::String);
+pub struct MessageId(pub nonempty::String);
 
 impl fmt::Display for MessageId {
     // This trait requires `fmt` with this exact signature.
