@@ -4,7 +4,7 @@ use cosmwasm_std::{to_binary, Deps, QueryRequest, StdResult, Uint64, WasmQuery, 
 use multisig::{msg::Multisig, types::MultisigState};
 
 use crate::{
-    state::{CONFIG, MULTISIG_SESSION_TX, TRANSACTION_INFO}, types::TxHash, contract::XRPLSignedTransaction,
+    state::{CONFIG, MULTISIG_SESSION_TX, TRANSACTION_INFO}, types::TxHash, contract::make_xrpl_signed_tx,
 };
 
 #[cw_serde]
@@ -46,7 +46,7 @@ pub fn get_proof(deps: Deps, multisig_session_id: Uint64) -> StdResult<GetProofR
                 .map(|(signer, signature)| (signer.clone(), signature.clone().unwrap()))
                 .collect();
 
-            let signed_tx = XRPLSignedTransaction::new(tx_info.unsigned_contents, axelar_signers);
+            let signed_tx = make_xrpl_signed_tx(tx_info.unsigned_contents, axelar_signers);
             // TODO: serialize using XRPL encoding: https://xrpl.org/serialization.html
             let tx_blob: HexBinary = signed_tx.try_into()?;
             GetProofResponse::Completed { tx_hash, tx_blob }

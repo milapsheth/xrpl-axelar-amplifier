@@ -46,6 +46,9 @@ pub enum ContractError {
 
     #[error("transaction has not been confirmed")]
     TransactionStatusNotConfirmed,
+
+    #[error("invalid payment amount")]
+    InvalidPaymentAmount,
 }
 
 impl From<ContractError> for StdError {

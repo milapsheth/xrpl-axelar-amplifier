@@ -5,3 +5,4 @@ pub mod reply;
 pub mod events;
 pub mod types;
 pub mod query;
+pub mod xrpl_multisig;

@@ -3,7 +3,7 @@ use std::{str::FromStr, ops::Add, num::NonZeroU32};
 #[cfg(not(feature = "library"))]
 use axelar_wasm_std::Threshold;
 use axelar_wasm_std::{snapshot, Participant};
-use cosmwasm_schema::{cw_serde, serde::Serializer};
+use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
     entry_point, Storage, Addr, HexBinary, wasm_execute, SubMsg, Reply,
     to_binary, DepsMut, Env, MessageInfo, Response, QueryRequest, WasmQuery, QuerierWrapper,
@@ -11,15 +11,15 @@ use cosmwasm_std::{
 use bs58;
 use multisig::key::{KeyType, PublicKey};
 use ripemd::Ripemd160;
-use sha2::{Sha256, Sha512, Digest};
-use serde_json;
+use sha2::{Sha256, Digest};
 use voting_verifier::{state::MessageId, execute::MessageStatus};
 
 use crate::{
     error::ContractError,
-    state::{Config, CONFIG, REPLY_TX_HASH, LAST_ASSIGNED_TICKET_NUMBER, AVAILABLE_TICKETS, TRANSACTION_INFO, TOKENS, CURRENT_WORKER_SET, WorkerSet, NEXT_WORKER_SET, LATEST_TICKET_CREATE_TX_HASH, NEXT_SEQUENCE_NUMBER},
+    state::{Config, CONFIG, REPLY_TX_HASH, TOKENS, CURRENT_WORKER_SET, WorkerSet, NEXT_WORKER_SET},
     reply,
     types::*,
+    xrpl_multisig::{self, XRPLSignerEntry, XRPLPaymentAmount, XRPLUnsignedTx, XRPLSigner, XRPLSignedTransaction, XRPLTokenAmount},
 };
 
 use connection_router::state::{Message, CrossChainId, ChainName};
@@ -105,141 +105,23 @@ pub fn get_message(
     Ok(message)
 }
 
-fn itoa_serialize<S>(x: &u64, s: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    s.serialize_str(&x.to_string()[..])
-}
-
-#[cw_serde]
-pub struct XRPLTokenAmount(String);
-
-#[cw_serde]
-#[serde(untagged)]
-pub enum XRPLPaymentAmount {
-    Drops(
-        #[serde(serialize_with = "itoa_serialize")]
-        u64,
-    ),
-    Token(XRPLToken, XRPLTokenAmount),
-}
-
-/*impl Serialize for XRPLPaymentAmount {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match &self {
-            XRPLPaymentAmount::Drops(drops) => {
-                serializer.serialize_str(&drops.to_string()[..])
+pub fn make_xrpl_signed_tx(unsigned_tx: XRPLUnsignedTx, axelar_signers: Vec<(multisig::msg::Signer, multisig::key::Signature)>) -> XRPLSignedTransaction {
+    let xrpl_signers: Vec<XRPLSigner> = axelar_signers
+        .iter()
+        .map(|(axelar_signer, signature)| {
+            let xrpl_address = public_key_to_xrpl_address(axelar_signer.pub_key.clone());
+            XRPLSigner {
+                account: xrpl_address,
+                signing_pub_key: axelar_signer.pub_key.clone().into(),
+                txn_signature: HexBinary::from(signature.clone().as_ref())
             }
-            XRPLPaymentAmount::Token(token) => {
-                token.serialize(serializer)
-            }
-        }
+        })
+        .collect::<Vec<XRPLSigner>>();
+
+    XRPLSignedTransaction {
+        unsigned_tx,
+        signers: xrpl_signers,
     }
-}*/
-
-#[cw_serde]
-#[serde(untagged)]
-pub enum Sequence {
-    Plain(u32),
-    Ticket(u32),
-}
-
-impl Into<u32> for Sequence {
-    fn into(self) -> u32 {
-        match self {
-            Sequence::Plain(sequence) => sequence,
-            Sequence::Ticket(ticket) => ticket,
-        }
-    }
-}
-
-#[cw_serde]
-#[serde(rename_all = "PascalCase")]
-pub struct XRPLTxCommonFields {
-    account: String, // TODO: redundant here?
-    #[serde(serialize_with = "itoa_serialize")]
-    fee: u64,
-    sequence: Sequence,
-    signing_pub_key: String,
-    last_ledger_sequence: u32,
-}
-
-#[cw_serde]
-#[serde(rename_all = "PascalCase", tag = "SignerEntry")]
-pub struct XRPLSignerEntry {
-    account: String,
-    signer_weight: u16,
-}
-
-#[cw_serde]
-#[serde(rename_all = "PascalCase")]
-pub struct XRPLUnsignedTx {
-    #[serde(flatten)]
-    common: XRPLTxCommonFields,
-    #[serde(flatten)]
-    partial: XRPLPartialTx,
-}
-
-#[cw_serde]
-#[serde(tag="TransactionType")]
-pub enum XRPLPartialTx {
-    Payment {
-        amount: XRPLPaymentAmount,
-        destination: String,
-    },
-    SignerListSet {
-        signer_quorum: NonZeroU32,
-        signer_entries: Vec<XRPLSignerEntry>,
-    },
-    TicketCreate {
-        ticket_count: u32,
-    },
-}
-
-impl XRPLUnsignedTx {
-    fn sequence_number_increment(&self, status: TransactionStatus) -> u32 {
-        if status == TransactionStatus::Pending || status == TransactionStatus::FailedOffChain {
-            return 0;
-        }
-
-        match self.partial {
-            XRPLPartialTx::Payment { .. } |
-            XRPLPartialTx::SignerListSet { .. } => {
-                match self.common.sequence {
-                    Sequence::Plain(_) => 1,
-                    Sequence::Ticket(_) => 0,
-                }
-            },
-            XRPLPartialTx::TicketCreate { ticket_count } => {
-                match status {
-                    TransactionStatus::Succeeded => ticket_count + 1,
-                    TransactionStatus::FailedOnChain => 1,
-                    TransactionStatus::FailedOffChain |
-                    TransactionStatus::Pending => unreachable!(),
-                }
-            },
-        }
-    }
-}
-
-#[cw_serde]
-#[serde(rename_all = "PascalCase")]
-pub struct Signer {
-    pub account: String,
-    pub txn_signature: HexBinary,
-    pub signing_pub_key: HexBinary,
-}
-
-#[cw_serde]
-#[serde(rename_all = "PascalCase")]
-pub struct XRPLSignedTransaction {
-    #[serde(flatten)]
-    pub unsigned_tx: XRPLUnsignedTx,
-    pub signers: Vec<Signer>,
 }
 
 pub fn public_key_to_xrpl_address(public_key: multisig::key::PublicKey) -> String {
@@ -260,75 +142,6 @@ pub fn public_key_to_xrpl_address(public_key: multisig::key::PublicKey) -> Strin
     bs58::encode([payload, checksum.to_vec()].concat())
         .with_alphabet(bs58::Alphabet::RIPPLE)
         .into_string()
-}
-
-impl XRPLSignedTransaction {
-    pub fn new(unsigned_tx: XRPLUnsignedTx, axelar_signers: Vec<(multisig::msg::Signer, multisig::key::Signature)>) -> Self {
-        let xrpl_signers: Vec<Signer> = axelar_signers
-            .iter()
-            .map(|(axelar_signer, signature)| {
-                let xrpl_address = public_key_to_xrpl_address(axelar_signer.pub_key.clone());
-                Signer {
-                    account: xrpl_address,
-                    signing_pub_key: axelar_signer.pub_key.clone().into(),
-                    txn_signature: HexBinary::from(signature.clone().as_ref())
-                }
-            })
-            .collect::<Vec<Signer>>();
-
-        Self {
-            unsigned_tx,
-            signers: xrpl_signers,
-        }
-    }
-}
-
-impl TryInto<HexBinary> for XRPLSignedTransaction {
-    type Error = ContractError;
-    fn try_into(self) -> Result<HexBinary, ContractError> {
-        Ok(HexBinary::from(serde_json::to_string(&self)
-            .map_err(|_| ContractError::SerializationFailed)?
-            .as_bytes()))
-    }
-}
-
-/*impl Serialize for XRPLUnsignedPaymentTransaction {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut state = serializer.serialize_struct("tx", 3)?;
-        state.serialize_field("TransactionType", "Payment")?;
-        state.serialize_field("Account", &self.account)?;
-        state.serialize_field("Fee", &self.fee.to_string())?;
-        match &self.sequence {
-            Sequence::Plain(sequence) => {
-                state.serialize_field("Sequence", &sequence)?;
-            }
-            Sequence::Ticket(ticket) => {
-                state.serialize_field("Sequence", "0")?;
-                state.serialize_field("TicketSequence", &ticket)?;
-            }
-        }
-        state.serialize_field("Amount", &self.amount)?;
-        state.serialize_field("Destination", &self.destination)?;
-        state.serialize_field("SigningPubKey", &self.signing_pub_key)?;
-        state.end()
-    }
-}*/
-
-pub const HASH_PREFIX_UNSIGNED_TRANSACTION_MULTI: [u8; 4] = [0x53, 0x4D, 0x54, 0x00];
-
-pub fn xrpl_hash(
-    prefix: [u8; 4],
-    unsigned_tx: &[u8],
-) -> [u8; 32] {
-    let mut hasher = Sha512::new_with_prefix(prefix);
-    hasher.update(unsigned_tx);
-    let hash: [u8; 64] = hasher.finalize().into();
-    let mut half_hash: [u8; 32] = [0; 32];
-    half_hash.copy_from_slice(&hash[..32]);
-    half_hash
 }
 
 pub fn make_xrpl_signer_entries(signers: Vec<(Participant, PublicKey)>) -> Vec<XRPLSignerEntry> {
@@ -369,77 +182,32 @@ pub fn should_update_worker_set(
         > max_diff
 }
 
-fn get_next_ticket_number(storage: &mut dyn Storage) -> Result<u32, ContractError> {
-    let last_assigned_ticket_number = LAST_ASSIGNED_TICKET_NUMBER.load(storage)?;
-    let available_tickets = AVAILABLE_TICKETS.load(storage)?;
-
-    // find next largest in available, otherwise use available_tickets[0]
-    let ticket_number = available_tickets.iter().find(|&x| x > &last_assigned_ticket_number).unwrap_or(&available_tickets[0]);
-    Ok(*ticket_number)
-}
-
-pub fn construct_proof(
+pub fn start_signing_session(
     storage: &mut dyn Storage,
-    config: Config,
-    partial_tx: XRPLPartialTx,
-    latest_ledger_index: u32,
-    sequence: Sequence,
-) -> Result<(Response, TxHash), ContractError> {
-    let unsigned_tx_common = XRPLTxCommonFields {
-        account: config.xrpl_multisig_address.to_string(),
-        fee: config.xrpl_fee,
-        sequence: sequence.clone(),
-        signing_pub_key: "".to_string(),
-        last_ledger_sequence: latest_ledger_index + config.last_ledger_sequence_offset,
-    };
-
-    let unsigned_tx = XRPLUnsignedTx {
-        common: unsigned_tx_common,
-        partial: partial_tx,
-    };
-
-    // TODO: implement XRPL encoding: https://xrpl.org/serialization.html
-    let encoded_unsigned_tx = serde_json::to_string(&unsigned_tx).map_err(|_| ContractError::SerializationFailed)?;
-
-    let tx_hash_hex: HexBinary = HexBinary::from(xrpl_hash(HASH_PREFIX_UNSIGNED_TRANSACTION_MULTI, encoded_unsigned_tx.as_bytes()));
-    let tx_hash: TxHash = TxHash(tx_hash_hex.clone());
+    config: &Config,
+    tx_hash: TxHash,
+) -> Result<Response, ContractError> {
     REPLY_TX_HASH.save(storage, &tx_hash)?;
-    TRANSACTION_INFO.save(
-        storage,
-        tx_hash.clone(),
-        &TransactionInfo {
-            status: TransactionStatus::Pending,
-            unsigned_contents: unsigned_tx,
-        }
-    )?;
-
-    if let Sequence::Ticket(ticket_number) = sequence {
-        LAST_ASSIGNED_TICKET_NUMBER.save(storage, &ticket_number)?;
-    }
-
     let cur_worker_set = CURRENT_WORKER_SET.load(storage)?;
     let start_sig_msg = multisig::msg::ExecuteMsg::StartSigningSession {
         key_id: cur_worker_set.id(),
-        msg: tx_hash_hex,
+        msg: tx_hash.into(),
     };
 
-    let wasm_msg = wasm_execute(config.axelar_multisig_address, &start_sig_msg, vec![])?;
+    let wasm_msg = wasm_execute(config.axelar_multisig_address.clone(), &start_sig_msg, vec![])?;
 
-    Ok((
-        Response::new().add_submessage(SubMsg::reply_on_success(wasm_msg, START_MULTISIG_REPLY_ID)),
-        tx_hash,
-    ))
+    Ok(Response::new().add_submessage(SubMsg::reply_on_success(wasm_msg, START_MULTISIG_REPLY_ID)))
 }
 
 fn construct_payment_proof(
     deps: DepsMut,
     info: MessageInfo,
-    config: Config,
+    config: &Config,
     message_id: CrossChainId,
     latest_ledger_index: u32,
 ) -> Result<Response, ContractError> {
     if info.funds.len() != 1 {
-        panic!("only one coin is allowed");
+        return Err(ContractError::InvalidPaymentAmount);
     }
 
     let mut funds = info.funds;
@@ -447,41 +215,42 @@ fn construct_payment_proof(
     let xrpl_token = TOKENS.load(deps.storage, coin.denom.clone())?;
     let message = get_message(deps.querier, message_id.clone(), config.gateway_address.clone())?;
     let drops = u64::try_from(coin.amount.u128() / 10u128.pow(12)).map_err(|_| ContractError::InvalidAmount)?;
-    let partial_unsigned_tx = XRPLPartialTx::Payment {
-        amount: if xrpl_token.currency == XRPLToken::NATIVE_CURRENCY {
-            XRPLPaymentAmount::Drops(drops)
-        } else {
-            XRPLPaymentAmount::Token(
-                XRPLToken {
-                    issuer: xrpl_token.issuer,
-                    currency: xrpl_token.currency,
-                },
-                XRPLTokenAmount(drops.to_string()),
-            )
-        },
-        destination: message.destination_address.to_string(),
+    let xrpl_payment_amount = if xrpl_token.currency == XRPLToken::NATIVE_CURRENCY {
+        XRPLPaymentAmount::Drops(drops)
+    } else {
+        XRPLPaymentAmount::Token(
+            XRPLToken {
+                issuer: xrpl_token.issuer,
+                currency: xrpl_token.currency,
+            },
+            XRPLTokenAmount(drops.to_string()),
+        )
     };
 
-    let ticket_number = get_next_ticket_number(deps.storage)?;
+    let (tx_hash, _) = xrpl_multisig::issue_payment(
+        deps.storage,
+        config,
+        message.destination_address.to_string().try_into()?,
+        xrpl_payment_amount,
+        latest_ledger_index,
+    )?;
 
     Ok(
-        construct_proof(
+        start_signing_session(
             deps.storage,
             config,
-            partial_unsigned_tx,
-            latest_ledger_index,
-            Sequence::Ticket(ticket_number),
-        )?.0
+            tx_hash,
+        )?
     )
 }
 
 fn construct_signer_list_set_proof(
     deps: DepsMut,
     env: Env,
-    config: Config,
+    config: &Config,
     latest_ledger_index: u32,
 ) -> Result<Response, ContractError> {
-    let workers_info = get_workers_info(deps.querier, &config)?;
+    let workers_info = get_workers_info(deps.querier, config)?;
     if !CURRENT_WORKER_SET.exists(deps.storage) {
         let new_worker_set = WorkerSet::new(
             workers_info.pubkeys_by_participant.clone(),
@@ -506,13 +275,10 @@ fn construct_signer_list_set_proof(
                 .collect(),
         };
 
-        return Ok(Response::new().add_message(wasm_execute(config.axelar_multisig_address, &key_gen_msg, vec![])?));
+        return Ok(Response::new().add_message(wasm_execute(config.axelar_multisig_address.clone(), &key_gen_msg, vec![])?));
     }
 
-    let partial_unsigned_tx = XRPLPartialTx::SignerListSet {
-        signer_quorum: config.signing_quorum,
-        signer_entries: make_xrpl_signer_entries(workers_info.pubkeys_by_participant.clone()),
-    };
+    let signer_list_entries = make_xrpl_signer_entries(workers_info.pubkeys_by_participant.clone());
 
     let new_worker_set = WorkerSet::new(
         workers_info.pubkeys_by_participant,
@@ -529,56 +295,46 @@ fn construct_signer_list_set_proof(
         return Err(ContractError::WorkerSetUnchanged.into())
     }
 
-    let ticket_number = get_next_ticket_number(deps.storage)?;
-    let (response, tx_hash) = construct_proof(
+    let (tx_hash, _unsigned_tx) = xrpl_multisig::issue_signer_list_set(
         deps.storage,
         config,
-        partial_unsigned_tx,
+        signer_list_entries,
         latest_ledger_index,
-        Sequence::Ticket(ticket_number),
     )?;
-    NEXT_WORKER_SET.save(deps.storage, tx_hash, &(new_worker_set, workers_info.snapshot.quorum))?;
-    Ok(response)
-}
 
-fn load_latest_ticket_create_tx_info(
-    storage: &mut dyn Storage,
-) -> Result<TransactionInfo, ContractError> {
-    let latest_ticket_create_tx_hash = LATEST_TICKET_CREATE_TX_HASH.load(storage)?;
-    Ok(TRANSACTION_INFO.load(storage, latest_ticket_create_tx_hash.clone())?)
+    NEXT_WORKER_SET.save(deps.storage, tx_hash.clone(), &(new_worker_set, workers_info.snapshot.quorum))?;
+
+    Ok(
+        start_signing_session(
+            deps.storage,
+            config,
+            tx_hash,
+        )?
+    )
 }
 
 fn construct_ticket_create_proof(
     storage: &mut dyn Storage,
-    config: Config,
+    config: &Config,
     latest_ledger_index: u32,
 ) -> Result<Response, ContractError> {
-    let available_tickets = AVAILABLE_TICKETS.load(storage)?;
-    let ticket_count = 250 - (available_tickets.len() as u32);
+    let ticket_count = xrpl_multisig::available_ticket_count(storage)?;
     if ticket_count < config.ticket_count_threshold {
         return Err(ContractError::TicketCountThresholdNotReached.into());
     }
 
-    let partial_unsigned_tx = XRPLPartialTx::TicketCreate {
-        ticket_count,
-    };
-
-    let latest_ticket_create_tx_info = load_latest_ticket_create_tx_info(storage)?;
-    let sequence_number = if latest_ticket_create_tx_info.status == TransactionStatus::Pending {
-        latest_ticket_create_tx_info.unsigned_contents.common.sequence.clone().into()
-    } else {
-        NEXT_SEQUENCE_NUMBER.load(storage)?
-    };
-
-    let (response, tx_hash) = construct_proof(
+    let (tx_hash, _unsigned_tx) = xrpl_multisig::issue_ticket_create(
         storage,
         config,
-        partial_unsigned_tx,
+        ticket_count,
         latest_ledger_index,
-        Sequence::Plain(sequence_number),
     )?;
 
-    LATEST_TICKET_CREATE_TX_HASH.save(storage, &tx_hash)?;
+    let response = start_signing_session(
+        storage,
+        config,
+        tx_hash,
+    )?;
 
     Ok(response)
 }
@@ -589,11 +345,6 @@ fn update_tx_status(
     voting_verifier_address: Addr,
     tx_hash: TxHash,
 ) -> Result<Response, ContractError> {
-    let mut tx_info = TRANSACTION_INFO.load(storage, tx_hash.clone())?;
-    if tx_info.status != TransactionStatus::Pending {
-        return Err(ContractError::TransactionStatusAlreadyUpdated);
-    }
-
     let query = voting_verifier::msg::QueryMsg::IsConfirmed { message_ids: vec![tx_hash.clone().into()] };
     let confirmations: Vec<(MessageId, Option<MessageStatus>)> = querier.query(&QueryRequest::Wasm(WasmQuery::Smart {
         contract_addr: voting_verifier_address.to_string(),
@@ -609,44 +360,7 @@ fn update_tx_status(
 
     let new_status: TransactionStatus = confirmation.into();
 
-    tx_info.status = new_status.clone();
-
-    let tx_sequence_number: u32 = tx_info.unsigned_contents.common.sequence.clone().into();
-    if let XRPLPartialTx::TicketCreate { ticket_count } = tx_info.unsigned_contents.partial {
-        if tx_info.status == TransactionStatus::Succeeded {
-            AVAILABLE_TICKETS.update(storage, |available_tickets| -> Result<_, ContractError> {
-                let mut new_available_tickets = available_tickets.clone();
-                for i in (tx_sequence_number + 1)..(tx_sequence_number + ticket_count + 1) {
-                    new_available_tickets.push(i);
-                }
-
-                Ok(new_available_tickets)
-            })?;
-        }
-    }
-
-    let sequence_number_increment = tx_info.unsigned_contents.sequence_number_increment(new_status.clone());
-    if sequence_number_increment > 0 && tx_sequence_number == NEXT_SEQUENCE_NUMBER.load(storage)? {
-        NEXT_SEQUENCE_NUMBER.save(storage, &(tx_sequence_number + sequence_number_increment))?;
-    }
-
-    if new_status != TransactionStatus::FailedOffChain {
-        if let Sequence::Ticket(_) = tx_info.unsigned_contents.common.sequence {
-            AVAILABLE_TICKETS.update(storage, |tickets| -> Result<_, ContractError> {
-                let new_available_tickets: Vec<u32> = tickets
-                    .iter()
-                    .filter(|&x| {
-                        let sequence_number: u32 = tx_info.unsigned_contents.common.sequence.clone().into();
-                        *x != sequence_number
-                    })
-                    .cloned()
-                    .collect();
-                Ok(new_available_tickets)
-            })?;
-        }
-    }
-
-    TRANSACTION_INFO.save(storage, tx_hash, &tx_info)?;
+    xrpl_multisig::update_tx_status(storage, tx_hash, new_status)?;
     Ok(Response::default())
 }
 
@@ -661,10 +375,10 @@ pub fn execute(
 
     let res = match msg {
         ExecuteMsg::ConstructProof(message_id, latest_ledger_index) => {
-            construct_payment_proof(deps, info, config, message_id, latest_ledger_index)
+            construct_payment_proof(deps, info, &config, message_id, latest_ledger_index)
         },
         ExecuteMsg::UpdateWorkerSet(latest_ledger_index) => {
-            construct_signer_list_set_proof(deps, env, config, latest_ledger_index)
+            construct_signer_list_set_proof(deps, env, &config, latest_ledger_index)
         },
         ExecuteMsg::UpdateTxStatus(tx_hash) => {
             update_tx_status(
@@ -675,7 +389,7 @@ pub fn execute(
             )
         },
         ExecuteMsg::TicketCreate(latest_ledger_index) => {
-            construct_ticket_create_proof(deps.storage, config, latest_ledger_index)
+            construct_ticket_create_proof(deps.storage, &config, latest_ledger_index)
         },
     }?;
 

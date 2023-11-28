@@ -5,7 +5,7 @@ use cw_storage_plus::{Key, KeyDeserialize, PrimaryKey};
 use multisig::key::{PublicKey, Signature};
 use voting_verifier::{state::MessageId, execute::MessageStatus};
 
-use crate::contract::XRPLUnsignedTx;
+use crate::xrpl_multisig::XRPLUnsignedTx;
 
 #[cw_serde]
 pub enum TransactionStatus {
@@ -17,6 +17,12 @@ pub enum TransactionStatus {
 
 #[cw_serde]
 pub struct TxHash(pub HexBinary);
+
+impl Into<HexBinary> for TxHash {
+    fn into(self) -> HexBinary {
+        self.0
+    }
+}
 
 impl Into<MessageId> for TxHash {
     fn into(self) -> MessageId {
