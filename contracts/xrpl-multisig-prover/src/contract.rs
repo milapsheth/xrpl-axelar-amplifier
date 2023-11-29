@@ -3,9 +3,9 @@ use std::{str::FromStr, ops::Add, num::NonZeroU32};
 #[cfg(not(feature = "library"))]
 use axelar_wasm_std::Threshold;
 use axelar_wasm_std::{snapshot, Participant};
-use cosmwasm_schema::cw_serde;
+use cosmwasm_schema::{cw_serde, serde::{de::DeserializeOwned, Serialize}};
 use cosmwasm_std::{
-    entry_point, Storage, Addr, HexBinary, wasm_execute, SubMsg, Reply,
+    entry_point, Storage, HexBinary, wasm_execute, SubMsg, Reply,
     to_binary, DepsMut, Env, MessageInfo, Response, QueryRequest, WasmQuery, QuerierWrapper,
 };
 use bs58;
@@ -82,27 +82,6 @@ pub fn instantiate(
     CONFIG.save(deps.storage, &config)?;
 
     Ok(Response::default())
-}
-
-pub fn get_message(
-    querier: QuerierWrapper,
-    message_id: CrossChainId,
-    gateway: Addr,
-) -> Result<Message, ContractError> {
-    let query = gateway::msg::QueryMsg::GetMessages { message_ids: vec![message_id] };
-    let mut messages: Vec<Message> = querier.query(&QueryRequest::Wasm(WasmQuery::Smart {
-        contract_addr: gateway.into(),
-        msg: to_binary(&query)?,
-    }))?;
-
-    if messages.len() != 1 {
-        // TODO: return error
-        // TODO: better error message
-        panic!("only one message is allowed");
-    }
-
-    let message = messages.remove(0);
-    Ok(message)
 }
 
 pub fn make_xrpl_signed_tx(unsigned_tx: XRPLUnsignedTx, axelar_signers: Vec<(multisig::msg::Signer, multisig::key::Signature)>) -> XRPLSignedTransaction {
@@ -200,7 +179,7 @@ pub fn start_signing_session(
 }
 
 fn construct_payment_proof(
-    deps: DepsMut,
+    deps: Deps,
     info: MessageInfo,
     config: &Config,
     message_id: CrossChainId,
@@ -213,7 +192,7 @@ fn construct_payment_proof(
     let mut funds = info.funds;
     let coin = funds.remove(0);
     let xrpl_token = TOKENS.load(deps.storage, coin.denom.clone())?;
-    let message = get_message(deps.querier, message_id.clone(), config.gateway_address.clone())?;
+    let message = deps.querier.get_message(message_id.clone())?;
     let drops = u64::try_from(coin.amount.u128() / 10u128.pow(12)).map_err(|_| ContractError::InvalidAmount)?;
     let xrpl_payment_amount = if xrpl_token.currency == XRPLToken::NATIVE_CURRENCY {
         XRPLPaymentAmount::Drops(drops)
@@ -245,7 +224,7 @@ fn construct_payment_proof(
 }
 
 fn construct_signer_list_set_proof(
-    deps: DepsMut,
+    deps: Deps,
     env: Env,
     config: &Config,
     latest_ledger_index: u32,
@@ -340,16 +319,10 @@ fn construct_ticket_create_proof(
 }
 
 fn update_tx_status(
-    storage: &mut dyn Storage,
-    querier: QuerierWrapper,
-    voting_verifier_address: Addr,
+    deps: Deps,
     tx_hash: TxHash,
 ) -> Result<Response, ContractError> {
-    let query = voting_verifier::msg::QueryMsg::IsConfirmed { message_ids: vec![tx_hash.clone().into()] };
-    let confirmations: Vec<(MessageId, Option<MessageStatus>)> = querier.query(&QueryRequest::Wasm(WasmQuery::Smart {
-        contract_addr: voting_verifier_address.to_string(),
-        msg: to_binary(&query)?,
-    }))?;
+    let confirmations = deps.querier.get_message_confirmation(tx_hash.clone())?;
 
     let confirmation = confirmations
         .get(0)
@@ -360,8 +333,13 @@ fn update_tx_status(
 
     let new_status: TransactionStatus = confirmation.into();
 
-    xrpl_multisig::update_tx_status(storage, tx_hash, new_status)?;
+    xrpl_multisig::update_tx_status(deps.storage, tx_hash, new_status)?;
     Ok(Response::default())
+}
+
+pub struct Deps<'a> {
+    pub storage: &'a mut dyn Storage,
+    pub querier: Querier<'a>,
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -372,6 +350,11 @@ pub fn execute(
     msg: ExecuteMsg,
 ) -> Result<Response, axelar_wasm_std::ContractError> {
     let config = CONFIG.load(deps.storage)?;
+    let querier = Querier::new(deps.querier, config.clone());
+    let deps = Deps {
+        storage: deps.storage,
+        querier,
+    };
 
     let res = match msg {
         ExecuteMsg::ConstructProof(message_id, latest_ledger_index) => {
@@ -381,12 +364,7 @@ pub fn execute(
             construct_signer_list_set_proof(deps, env, &config, latest_ledger_index)
         },
         ExecuteMsg::UpdateTxStatus(tx_hash) => {
-            update_tx_status(
-                deps.storage,
-                deps.querier,
-                config.voting_verifier_address,
-                tx_hash,
-            )
+            update_tx_status(deps, tx_hash)
         },
         ExecuteMsg::TicketCreate(latest_ledger_index) => {
             construct_ticket_create_proof(deps.storage, &config, latest_ledger_index)
@@ -396,17 +374,66 @@ pub fn execute(
     Ok(res)
 }
 
-fn get_workers_info(querier: QuerierWrapper, config: &Config) -> Result<WorkersInfo, ContractError> {
-    let active_workers_query = service_registry::msg::QueryMsg::GetActiveWorkers {
-        service_name: config.service_name.clone(),
-        chain_name: ChainName::from_str(XRPL_CHAIN_NAME)
-            .map_err(|_| ContractError::InvalidChainName)?,
-    };
+fn query<U, T>(querier: QuerierWrapper, contract_addr: String, query_msg: &T) -> Result<U, ContractError>
+where U: DeserializeOwned, T: Serialize + ?Sized {
+    querier.query(&QueryRequest::Wasm(WasmQuery::Smart {
+        contract_addr,
+        msg: to_binary(&query_msg)?,
+    })).map_err(ContractError::from)
+}
 
-    let workers: Vec<Worker> = querier.query(&QueryRequest::Wasm(WasmQuery::Smart {
-        contract_addr: config.service_registry_address.to_string(),
-        msg: to_binary(&active_workers_query)?,
-    }))?;
+pub struct Querier<'a> {
+    querier: QuerierWrapper<'a>,
+    config: Config,
+}
+
+impl<'a> Querier<'a> {
+    fn new(querier: QuerierWrapper<'a>, config: Config) -> Self {
+        Self {
+            querier,
+            config,
+        }
+    }
+
+    pub fn get_active_workers(&self) -> Result<Vec<Worker>, ContractError> {
+        query(self.querier, self.config.service_registry_address.to_string(),
+            &service_registry::msg::QueryMsg::GetActiveWorkers {
+                service_name: self.config.service_name.clone(),
+                chain_name: ChainName::from_str(XRPL_CHAIN_NAME).unwrap(),
+            },
+        )
+    }
+
+    pub fn get_public_key(&self, worker_address: String) -> Result<PublicKey, ContractError> {
+        query(self.querier, self.config.axelar_multisig_address.to_string(),
+            &multisig::msg::QueryMsg::GetPublicKey {
+                worker_address,
+                key_type: KeyType::Ecdsa,
+            },
+        )
+    }
+
+    pub fn get_message(&self, message_id: CrossChainId) -> Result<Message, ContractError> {
+        let messages: Vec<Message> = query(self.querier, self.config.gateway_address.to_string(),
+            &gateway::msg::QueryMsg::GetMessages {
+                message_ids: vec![message_id],
+            }
+        )?;
+        Ok(messages[0].clone())
+    }
+
+    pub fn get_message_confirmation(&self, tx_hash: TxHash) -> Result<Vec<(MessageId, Option<MessageStatus>)>, ContractError> {
+        let confirmations: Vec<(MessageId, Option<MessageStatus>)> = query(self.querier, self.config.voting_verifier_address.to_string(),
+            &voting_verifier::msg::QueryMsg::IsConfirmed {
+                message_ids: vec![tx_hash.into()],
+            }
+        )?;
+        Ok(confirmations)
+    }
+}
+
+fn get_workers_info(querier: Querier, config: &Config) -> Result<WorkersInfo, ContractError> {
+    let workers: Vec<Worker> = querier.get_active_workers()?;
 
     let participants = workers
         .clone()
@@ -420,14 +447,7 @@ fn get_workers_info(querier: QuerierWrapper, config: &Config) -> Result<WorkersI
 
     let mut pub_keys = vec![];
     for worker in &workers {
-        let pub_key_query = multisig::msg::QueryMsg::GetPublicKey {
-            worker_address: worker.address.to_string(),
-            key_type: KeyType::Ecdsa, // TODO: why just Ecdsa?
-        };
-        let pub_key: PublicKey = querier.query(&QueryRequest::Wasm(WasmQuery::Smart {
-            contract_addr: config.axelar_multisig_address.to_string(),
-            msg: to_binary(&pub_key_query)?,
-        }))?;
+        let pub_key: PublicKey = querier.get_public_key(worker.address.to_string())?;
         pub_keys.push(pub_key);
     }
 
