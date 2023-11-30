@@ -43,7 +43,7 @@ impl Into<TransactionStatus> for MessageStatus {
 #[cw_serde]
 pub struct TransactionInfo {
     pub status: TransactionStatus,
-    // TODO: save the hash of the transaction
+    // TODO: save only the hash of the unsigned tx
     pub unsigned_contents: XRPLUnsignedTx,
 }
 
