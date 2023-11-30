@@ -106,13 +106,13 @@ impl WorkerSet {
 
 fn convert_uint256_to_u16_unsafely(value: Uint256) -> u16 {
     let bytes = value.to_le_bytes();
-    (bytes[0] as u16) << 8 | (bytes[1] as u16)
+    (bytes[0] as u16) | (bytes[1] as u16) << 8
 }
 
 // Converts a Vec<Uint256> to Vec<u16>, scaling down with precision loss, if necessary.
 // We make sure that XRPL multisig and Axelar multisig both use the same scaled down numbers and have the same precision loss
 fn convert_or_scale_weights(weights: Vec<Uint256>) -> Vec<u16> {
-    let total_weight: Uint256 = weights.iter().sum();
+    let max_weight: Uint256 = weights.iter().sum();
     let max_u16_as_uint256 = Uint256::from(u16::MAX);
 
     // Scaling down
@@ -182,4 +182,20 @@ pub fn should_update_worker_set(
     new_workers.signers.difference(&cur_workers.signers).count()
         + cur_workers.signers.difference(&new_workers.signers).count()
         > max_diff
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_convert_or_scale_weights() {
+        let weights = vec![Uint256::from(1u128), Uint256::from(2u128), Uint256::from(3u128)];
+        let scaled_weights = convert_or_scale_weights(weights);
+        assert_eq!(scaled_weights, vec![21845, 43690, 65535]);
+
+        let weights = vec![Uint256::from(1u128), Uint256::from(2u128), Uint256::from(3u128), Uint256::from(4u128)];
+        let scaled_weights = convert_or_scale_weights(weights);
+        assert_eq!(scaled_weights, vec![16384, 32768, 49152, 65535]);
+    }
 }
