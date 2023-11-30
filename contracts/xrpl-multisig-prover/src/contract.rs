@@ -131,7 +131,7 @@ fn construct_payment_proof(
         )
     };
 
-    let (tx_hash, _) = xrpl_multisig::issue_payment(
+    let tx_hash = xrpl_multisig::issue_payment(
         deps.storage,
         config,
         message.destination_address.to_string().try_into()?,
@@ -154,12 +154,11 @@ fn construct_signer_list_set_proof(
     config: &Config,
     latest_ledger_index: u32,
 ) -> Result<Response, ContractError> {
-    let new_worker_set = axelar_workers::get_active_worker_set(deps.querier, config.signing_threshold, env.block.height)?;
-
     if !CURRENT_WORKER_SET.exists(deps.storage) {
         return Err(ContractError::WorkerSetIsNotSet.into())
     }
 
+    let new_worker_set = axelar_workers::get_active_worker_set(deps.querier, config.signing_threshold, env.block.height)?;
     let cur_worker_set = CURRENT_WORKER_SET.load(deps.storage)?;
     if !axelar_workers::should_update_worker_set(
         &new_worker_set,
@@ -169,7 +168,7 @@ fn construct_signer_list_set_proof(
         return Err(ContractError::WorkerSetUnchanged.into())
     }
 
-    let (tx_hash, _unsigned_tx) = xrpl_multisig::issue_signer_list_set(
+    let tx_hash = xrpl_multisig::issue_signer_list_set(
         deps.storage,
         config,
         cur_worker_set,
@@ -197,7 +196,7 @@ fn construct_ticket_create_proof(
         return Err(ContractError::TicketCountThresholdNotReached.into());
     }
 
-    let (tx_hash, _unsigned_tx) = xrpl_multisig::issue_ticket_create(
+    let tx_hash = xrpl_multisig::issue_ticket_create(
         storage,
         config,
         ticket_count,

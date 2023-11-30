@@ -244,7 +244,7 @@ fn issue_tx(
     partial_unsigned_tx: XRPLPartialTx,
     latest_ledger_index: u32,
     sequence: Sequence,
-) -> Result<(TxHash, XRPLUnsignedTx), ContractError> {
+) -> Result<TxHash, ContractError> {
     let unsigned_tx = construct_unsigned_tx(
         config,
         partial_unsigned_tx,
@@ -267,10 +267,10 @@ fn issue_tx(
         LAST_ASSIGNED_TICKET_NUMBER.save(storage, &ticket_number)?;
     }
 
-    Ok((tx_hash, unsigned_tx))
+    Ok(tx_hash)
 }
 
-pub fn issue_ticket_create(storage: &mut dyn Storage, config: &Config, ticket_count: u32, latest_ledger_index: u32) -> Result<(TxHash, XRPLUnsignedTx), ContractError> {
+pub fn issue_ticket_create(storage: &mut dyn Storage, config: &Config, ticket_count: u32, latest_ledger_index: u32) -> Result<TxHash, ContractError> {
     let partial_unsigned_tx = XRPLPartialTx::TicketCreate {
         ticket_count,
     };
@@ -282,7 +282,7 @@ pub fn issue_ticket_create(storage: &mut dyn Storage, config: &Config, ticket_co
         NEXT_SEQUENCE_NUMBER.load(storage)?
     };
 
-    let (tx_hash, unsigned_tx) = issue_tx(
+    let tx_hash = issue_tx(
         storage,
         config,
         partial_unsigned_tx,
@@ -291,7 +291,7 @@ pub fn issue_ticket_create(storage: &mut dyn Storage, config: &Config, ticket_co
     )?;
 
     LATEST_TICKET_CREATE_TX_HASH.save(storage, &tx_hash)?;
-    Ok((tx_hash, unsigned_tx))
+    Ok(tx_hash)
 }
 
 fn load_latest_ticket_create_tx_info(
@@ -301,7 +301,7 @@ fn load_latest_ticket_create_tx_info(
     Ok(TRANSACTION_INFO.load(storage, latest_ticket_create_tx_hash.clone())?)
 }
 
-pub fn issue_payment(storage: &mut dyn Storage, config: &Config, destination: nonempty::String, amount: XRPLPaymentAmount, latest_ledger_index: u32) -> Result<(TxHash, XRPLUnsignedTx), ContractError> {
+pub fn issue_payment(storage: &mut dyn Storage, config: &Config, destination: nonempty::String, amount: XRPLPaymentAmount, latest_ledger_index: u32) -> Result<TxHash, ContractError> {
     let partial_unsigned_tx = XRPLPartialTx::Payment {
         destination,
         amount,
@@ -350,7 +350,7 @@ pub fn make_xrpl_signer_entries(signers: BTreeSet<AxelarSigner>) -> Vec<XRPLSign
         ).collect()
 }
 
-pub fn issue_signer_list_set(storage: &mut dyn Storage, config: &Config, workers: WorkerSet, latest_ledger_index: u32) -> Result<(TxHash, XRPLUnsignedTx), ContractError> {
+pub fn issue_signer_list_set(storage: &mut dyn Storage, config: &Config, workers: WorkerSet, latest_ledger_index: u32) -> Result<TxHash, ContractError> {
     let partial_unsigned_tx = XRPLPartialTx::SignerListSet {
         signer_quorum: workers.quorum,
         signer_entries: make_xrpl_signer_entries(workers.signers),
