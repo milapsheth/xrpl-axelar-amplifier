@@ -1,25 +1,19 @@
-use std::str::FromStr;
-
 #[cfg(not(feature = "library"))]
 use axelar_wasm_std::Threshold;
-use cosmwasm_schema::{cw_serde, serde::{de::DeserializeOwned, Serialize}};
+use connection_router::state::CrossChainId;
+use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
     entry_point, Storage, wasm_execute, SubMsg, Reply,
-    to_binary, DepsMut, Env, MessageInfo, Response, QueryRequest, WasmQuery, QuerierWrapper, Fraction,
+    DepsMut, Env, MessageInfo, Response, Fraction,
 };
-use multisig::key::{KeyType, PublicKey};
-use voting_verifier::{state::MessageId, execute::MessageStatus};
 
 use crate::{
     error::ContractError,
     state::{Config, CONFIG, REPLY_TX_HASH, TOKENS, CURRENT_WORKER_SET, NEXT_WORKER_SET},
     reply,
     types::*,
-    xrpl_multisig::{self, XRPLPaymentAmount, XRPLTokenAmount}, axelar_workers,
+    xrpl_multisig::{self, XRPLPaymentAmount, XRPLTokenAmount}, axelar_workers, querier::Querier,
 };
-
-use connection_router::state::{Message, CrossChainId, ChainName};
-use service_registry::state::Worker;
 
 pub const START_MULTISIG_REPLY_ID: u64 = 1;
 
@@ -45,8 +39,6 @@ pub enum ExecuteMsg {
     UpdateWorkerSet(u32),
     TicketCreate(u32),
 }
-
-const XRPL_CHAIN_NAME: &str = "XRPL";
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
@@ -275,64 +267,6 @@ pub fn execute(
     }?;
 
     Ok(res)
-}
-
-fn query<U, T>(querier: QuerierWrapper, contract_addr: String, query_msg: &T) -> Result<U, ContractError>
-where U: DeserializeOwned, T: Serialize + ?Sized {
-    querier.query(&QueryRequest::Wasm(WasmQuery::Smart {
-        contract_addr,
-        msg: to_binary(&query_msg)?,
-    })).map_err(ContractError::from)
-}
-
-pub struct Querier<'a> {
-    querier: QuerierWrapper<'a>,
-    config: Config,
-}
-
-impl<'a> Querier<'a> {
-    fn new(querier: QuerierWrapper<'a>, config: Config) -> Self {
-        Self {
-            querier,
-            config,
-        }
-    }
-
-    pub fn get_active_workers(&self) -> Result<Vec<Worker>, ContractError> {
-        query(self.querier, self.config.service_registry_address.to_string(),
-            &service_registry::msg::QueryMsg::GetActiveWorkers {
-                service_name: self.config.service_name.clone(),
-                chain_name: ChainName::from_str(XRPL_CHAIN_NAME).unwrap(),
-            },
-        )
-    }
-
-    pub fn get_public_key(&self, worker_address: String) -> Result<PublicKey, ContractError> {
-        query(self.querier, self.config.axelar_multisig_address.to_string(),
-            &multisig::msg::QueryMsg::GetPublicKey {
-                worker_address,
-                key_type: KeyType::Ecdsa,
-            },
-        )
-    }
-
-    pub fn get_message(&self, message_id: CrossChainId) -> Result<Message, ContractError> {
-        let messages: Vec<Message> = query(self.querier, self.config.gateway_address.to_string(),
-            &gateway::msg::QueryMsg::GetMessages {
-                message_ids: vec![message_id],
-            }
-        )?;
-        Ok(messages[0].clone())
-    }
-
-    pub fn get_message_confirmation(&self, tx_hash: TxHash) -> Result<Vec<(MessageId, Option<MessageStatus>)>, ContractError> {
-        let confirmations: Vec<(MessageId, Option<MessageStatus>)> = query(self.querier, self.config.voting_verifier_address.to_string(),
-            &voting_verifier::msg::QueryMsg::IsConfirmed {
-                message_ids: vec![tx_hash.into()],
-            }
-        )?;
-        Ok(confirmations)
-    }
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]

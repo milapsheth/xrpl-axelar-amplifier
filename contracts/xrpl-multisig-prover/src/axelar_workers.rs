@@ -11,7 +11,7 @@ use sha2::Digest;
 use multisig::key::PublicKey;
 use sha3::Keccak256;
 
-use crate::contract::Querier;
+use crate::querier::Querier;
 use crate::error::ContractError;
 
 #[cw_serde]
