@@ -1,18 +1,14 @@
-use std::{num::NonZeroU32, collections::BTreeSet};
-
-use axelar_wasm_std::{Participant, nonempty::Uint256};
-use cosmwasm_std::{Addr, HexBinary};
+use axelar_wasm_std::Threshold;
+use cosmwasm_std::Addr;
 use cw_storage_plus::{Item, Map};
 use cosmwasm_schema::cw_serde;
-use multisig::{key::PublicKey, msg::Signer};
-use sha3::{Digest, Keccak256};
-use crate::types::{TransactionInfo, TxHash, XRPLToken};
+use crate::{types::{TransactionInfo, TxHash, XRPLToken}, axelar_workers::WorkerSet};
 
 #[cw_serde]
 pub struct Config {
     pub axelar_multisig_address: Addr,
     pub gateway_address: Addr,
-    pub signing_quorum: NonZeroU32,
+    pub signing_threshold: Threshold,
     pub xrpl_multisig_address: Addr,
     pub voting_verifier_address: Addr,
     pub service_registry_address: Addr,
@@ -42,47 +38,5 @@ pub const LATEST_TICKET_CREATE_TX_HASH: Item<TxHash> = Item::new("latest_ticket_
 
 pub const TOKENS: Map<String, XRPLToken> = Map::new("tokens");
 
-#[cw_serde]
-pub struct WorkerSet {
-    pub signers: BTreeSet<Signer>,
-    pub threshold: Uint256,
-    // for hash uniqueness. The same exact worker set could be in use at two different times,
-    // and we need to be able to distinguish between the two
-    pub created_at: u64,
-}
-
-impl WorkerSet {
-    pub fn new(
-        participants: Vec<(Participant, PublicKey)>,
-        threshold: Uint256,
-        block_height: u64,
-    ) -> Self {
-        let signers = participants
-            .into_iter()
-            .map(|(participant, pub_key)| Signer {
-                address: participant.address.clone(),
-                weight: participant.weight.into(),
-                pub_key,
-            })
-            .collect();
-
-        WorkerSet {
-            signers,
-            threshold,
-            created_at: block_height,
-        }
-    }
-
-    pub fn hash(&self) -> HexBinary {
-        Keccak256::digest(serde_json::to_vec(&self).expect("couldn't serialize worker set"))
-            .as_slice()
-            .into()
-    }
-
-    pub fn id(&self) -> String {
-        self.hash().to_hex()
-    }
-}
-
 pub const CURRENT_WORKER_SET: Item<WorkerSet> = Item::new("current_worker_set");
-pub const NEXT_WORKER_SET: Map<TxHash, (WorkerSet, Uint256)> = Map::new("next_worker_set");
+pub const NEXT_WORKER_SET: Map<TxHash, WorkerSet> = Map::new("next_worker_set");

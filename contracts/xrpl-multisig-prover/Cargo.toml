@@ -9,7 +9,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-cosmwasm-std = { workspace = true }
+cosmwasm-std = { workspace = true, version = "1.5.0" }
 cosmwasm-schema = { workspace = true }
 axelar-wasm-std = { workspace = true }
 axelar-wasm-std-derive = { workspace = true }

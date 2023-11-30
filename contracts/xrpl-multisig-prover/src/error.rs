@@ -49,6 +49,12 @@ pub enum ContractError {
 
     #[error("invalid payment amount")]
     InvalidPaymentAmount,
+
+    #[error("invalid signing threshold")]
+    InvalidSigningThreshold,
+
+    #[error("worker set is not set")]
+    WorkerSetIsNotSet,
 }
 
 impl From<ContractError> for StdError {

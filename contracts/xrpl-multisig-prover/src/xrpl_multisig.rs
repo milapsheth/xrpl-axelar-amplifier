@@ -1,15 +1,16 @@
-use std::num::NonZeroU32;
+use std::collections::BTreeSet;
 
 use axelar_wasm_std::nonempty;
 use cosmwasm_schema::{cw_serde, serde::Serializer};
 use cosmwasm_std::{Storage, HexBinary};
-use sha2::{Sha512, Digest};
+use ripemd::Ripemd160;
+use sha2::{Sha512, Digest, Sha256};
 use serde_json;
 
 use crate::{
     error::ContractError,
     state::{Config, LAST_ASSIGNED_TICKET_NUMBER, AVAILABLE_TICKETS, TRANSACTION_INFO, LATEST_TICKET_CREATE_TX_HASH, NEXT_SEQUENCE_NUMBER},
-    types::*,
+    types::*, axelar_workers::{WorkerSet, AxelarSigner},
 };
 
 /*
@@ -95,7 +96,7 @@ pub enum XRPLPartialTx {
         destination: nonempty::String,
     },
     SignerListSet {
-        signer_quorum: NonZeroU32,
+        signer_quorum: u32,
         signer_entries: Vec<XRPLSignerEntry>,
     },
     TicketCreate {
@@ -316,10 +317,43 @@ pub fn issue_payment(storage: &mut dyn Storage, config: &Config, destination: no
     )
 }
 
-pub fn issue_signer_list_set(storage: &mut dyn Storage, config: &Config, signer_entries: Vec<XRPLSignerEntry>, latest_ledger_index: u32) -> Result<(TxHash, XRPLUnsignedTx), ContractError> {
+pub fn public_key_to_xrpl_address(public_key: multisig::key::PublicKey) -> String {
+    let public_key_hex: HexBinary = public_key.into();
+
+    assert!(public_key_hex.len() == 33);
+
+    let public_key_inner_hash = Sha256::digest(public_key_hex);
+    let account_id = Ripemd160::digest(public_key_inner_hash);
+
+    let address_type_prefix: &[u8] = &[0x00];
+    let payload = [address_type_prefix, &account_id].concat();
+
+    let checksum_hash1 = Sha256::digest(payload.clone());
+    let checksum_hash2 = Sha256::digest(checksum_hash1);
+    let checksum = &checksum_hash2[0..4];
+
+    bs58::encode([payload, checksum.to_vec()].concat())
+        .with_alphabet(bs58::Alphabet::RIPPLE)
+        .into_string()
+}
+
+pub fn make_xrpl_signer_entries(signers: BTreeSet<AxelarSigner>) -> Vec<XRPLSignerEntry> {
+    signers
+        .into_iter()
+        .map(
+            |worker| {
+                XRPLSignerEntry {
+                    account: public_key_to_xrpl_address(worker.pub_key),
+                    signer_weight: worker.weight,
+                }
+            }
+        ).collect()
+}
+
+pub fn issue_signer_list_set(storage: &mut dyn Storage, config: &Config, workers: WorkerSet, latest_ledger_index: u32) -> Result<(TxHash, XRPLUnsignedTx), ContractError> {
     let partial_unsigned_tx = XRPLPartialTx::SignerListSet {
-        signer_quorum: config.signing_quorum,
-        signer_entries,
+        signer_quorum: workers.quorum,
+        signer_entries: make_xrpl_signer_entries(workers.signers),
     };
 
     let ticket_number = get_next_ticket_number(storage)?;
@@ -330,10 +364,6 @@ pub fn issue_signer_list_set(storage: &mut dyn Storage, config: &Config, signer_
         latest_ledger_index,
         Sequence::Ticket(ticket_number)
     )
-}
-
-fn issue_trust_line() -> XRPLUnsignedTx {
-    unimplemented!()
 }
 
 fn mark_tickets_available(storage: &mut dyn Storage, tickets: impl Iterator<Item = u32>) -> Result<(), ContractError> {
@@ -389,4 +419,87 @@ pub fn update_tx_status(storage: &mut dyn Storage, tx_hash: TxHash, new_status: 
 
     TRANSACTION_INFO.save(storage, tx_hash, &tx_info)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use multisig::key::PublicKey;
+
+    use super::*;
+
+    /*#[test]
+    fn serialize_xrpl_unsigned_token_payment_transaction() {
+        let unsigned_tx = XRPLUnsignedPaymentTransaction {
+            common: XRPLTxCommonFields {
+                account: "axelar1lsasewgqj7698e9a25v3c9kkzweee9cvejq5cs".to_string(),
+                fee: FEE,
+                sequence: Sequence::Plain(0),
+            },
+            amount: XRPLPaymentAmount::Token(
+                XRPLToken {
+                    currency: "USD".to_string(),
+                    issuer: "axelar1lsasewgqj7698e9a25v3c9kkzweee9cvejq5cs".to_string(),
+                },
+                XRPLTokenAmount("100".to_string()),
+            ),
+            destination: "axelar1lsasewgqj7698e9a25v3c9kkzweee9cvejq5cs".to_string(),
+            signing_pub_key: "".to_string(),
+        };
+        let encoded_unsigned_tx = serde_json::to_string(&unsigned_tx);
+        println!("{}", encoded_unsigned_tx.unwrap());
+    }
+
+    #[test]
+    fn serialize_xrpl_signer_list_set_transaction() {
+        let unsigned_tx = XRPLUnsignedPaymentTransaction {
+            common: XRPLTxCommonFields {
+                account: "axelar1lsasewgqj7698e9a25v3c9kkzweee9cvejq5cs".to_string(),
+                fee: FEE,
+                sequence: Sequence::Plain(0),
+            },
+            amount: XRPLPaymentAmount::Token(
+                XRPLToken {
+                    currency: "USD".to_string(),
+                    issuer: "axelar1lsasewgqj7698e9a25v3c9kkzweee9cvejq5cs".to_string(),
+                },
+                XRPLTokenAmount("100".to_string()),
+            ),
+            destination: "axelar1lsasewgqj7698e9a25v3c9kkzweee9cvejq5cs".to_string(),
+            signing_pub_key: "".to_string(),
+        };
+        let encoded_unsigned_tx = serde_json::to_string(&unsigned_tx);
+        println!("{}", encoded_unsigned_tx.unwrap());
+    }
+
+    #[test]
+    fn serialize_xrpl_unsigned_xrp_payment_transaction() {
+        let unsigned_tx = XRPLUnsignedPaymentTransaction {
+            common: XRPLTxCommonFields {
+                account: "axelar1lsasewgqj7698e9a25v3c9kkzweee9cvejq5cs".to_string(),
+                fee: FEE,
+                sequence: Sequence::Plain(0),
+            },
+            amount: XRPLPaymentAmount::Drops(10),
+            destination: "axelar1lsasewgqj7698e9a25v3c9kkzweee9cvejq5cs".to_string(),
+            signing_pub_key: "".to_string(),
+        };
+        let encoded_unsigned_tx = serde_json::to_string(&unsigned_tx);
+        println!("{}", encoded_unsigned_tx.unwrap());
+    }*/
+
+    #[test]
+    fn ed25519_public_key_to_xrpl_address() {
+        assert_eq!(
+            public_key_to_xrpl_address(PublicKey::Ed25519(HexBinary::from(hex::decode("ED9434799226374926EDA3B54B1B461B4ABF7237962EAE18528FEA67595397FA32").unwrap()))),
+            "rDTXLQ7ZKZVKz33zJbHjgVShjsBnqMBhmN"
+        );
+    }
+
+    #[test]
+    fn secp256k1_public_key_to_xrpl_address() {
+        assert_eq!(
+            public_key_to_xrpl_address(PublicKey::Ecdsa(HexBinary::from(hex::decode("0303E20EC6B4A39A629815AE02C0A1393B9225E3B890CAE45B59F42FA29BE9668D").unwrap()))),
+            "rnBFvgZphmN39GWzUJeUitaP22Fr9be75H"
+        );
+    }
 }

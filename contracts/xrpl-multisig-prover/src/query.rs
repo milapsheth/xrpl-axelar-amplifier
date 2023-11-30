@@ -4,7 +4,7 @@ use cosmwasm_std::{to_binary, Deps, QueryRequest, StdResult, Uint64, WasmQuery, 
 use multisig::{msg::Multisig, types::MultisigState};
 
 use crate::{
-    state::{CONFIG, MULTISIG_SESSION_TX, TRANSACTION_INFO}, types::TxHash, contract::make_xrpl_signed_tx,
+    state::{CONFIG, MULTISIG_SESSION_TX, TRANSACTION_INFO}, types::TxHash, xrpl_multisig::{XRPLUnsignedTx, XRPLSignedTransaction, XRPLSigner, self},
 };
 
 #[cw_serde]
@@ -19,6 +19,25 @@ pub enum QueryMsg {
 pub enum GetProofResponse {
     Completed { tx_hash: TxHash, tx_blob: HexBinary},
     Pending { tx_hash: TxHash },
+}
+
+pub fn make_xrpl_signed_tx(unsigned_tx: XRPLUnsignedTx, axelar_signers: Vec<(multisig::msg::Signer, multisig::key::Signature)>) -> XRPLSignedTransaction {
+    let xrpl_signers: Vec<XRPLSigner> = axelar_signers
+        .iter()
+        .map(|(axelar_signer, signature)| {
+            let xrpl_address = xrpl_multisig::public_key_to_xrpl_address(axelar_signer.pub_key.clone());
+            XRPLSigner {
+                account: xrpl_address,
+                signing_pub_key: axelar_signer.pub_key.clone().into(),
+                txn_signature: HexBinary::from(signature.clone().as_ref())
+            }
+        })
+        .collect::<Vec<XRPLSigner>>();
+
+    XRPLSignedTransaction {
+        unsigned_tx,
+        signers: xrpl_signers,
+    }
 }
 
 pub fn get_proof(deps: Deps, multisig_session_id: Uint64) -> StdResult<GetProofResponse> {

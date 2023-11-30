@@ -1,8 +1,8 @@
-use axelar_wasm_std::{Participant, Snapshot, nonempty};
+use axelar_wasm_std::nonempty;
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{from_binary, HexBinary, StdResult, Uint256};
 use cw_storage_plus::{Key, KeyDeserialize, PrimaryKey};
-use multisig::key::{PublicKey, Signature};
+use multisig::key::Signature;
 use voting_verifier::{state::MessageId, execute::MessageStatus};
 
 use crate::xrpl_multisig::XRPLUnsignedTx;
@@ -94,11 +94,6 @@ impl Operator {
             signature: Some(sig),
         }
     }
-}
-
-pub struct WorkersInfo {
-    pub snapshot: Snapshot,
-    pub pubkeys_by_participant: Vec<(Participant, PublicKey)>,
 }
 
 #[cw_serde]
