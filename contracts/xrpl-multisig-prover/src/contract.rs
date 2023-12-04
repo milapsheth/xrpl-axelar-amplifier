@@ -28,16 +28,15 @@ pub struct InstantiateMsg {
     service_name: String,
     worker_set_diff_threshold: u32,
     xrpl_fee: u64,
-    last_ledger_sequence_offset: u32,
     ticket_count_threshold: u32,
 }
 
 #[cw_serde]
 pub enum ExecuteMsg {
-    ConstructProof(CrossChainId, u32),
+    ConstructProof(CrossChainId),
     UpdateTxStatus(TxHash),
-    UpdateWorkerSet(u32),
-    TicketCreate(u32),
+    UpdateWorkerSet(),
+    TicketCreate(),
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -67,7 +66,6 @@ pub fn instantiate(
         service_name: msg.service_name,
         worker_set_diff_threshold: msg.worker_set_diff_threshold,
         xrpl_fee: msg.xrpl_fee,
-        last_ledger_sequence_offset: msg.last_ledger_sequence_offset,
         ticket_count_threshold: msg.ticket_count_threshold,
     };
 
@@ -108,7 +106,6 @@ fn construct_payment_proof(
     info: MessageInfo,
     config: &Config,
     message_id: CrossChainId,
-    latest_ledger_index: u32,
 ) -> Result<Response, ContractError> {
     if info.funds.len() != 1 {
         return Err(ContractError::InvalidPaymentAmount);
@@ -136,7 +133,6 @@ fn construct_payment_proof(
         config,
         message.destination_address.to_string().try_into()?,
         xrpl_payment_amount,
-        latest_ledger_index,
     )?;
 
     Ok(
@@ -152,7 +148,6 @@ fn construct_signer_list_set_proof(
     deps: Deps,
     env: Env,
     config: &Config,
-    latest_ledger_index: u32,
 ) -> Result<Response, ContractError> {
     if !CURRENT_WORKER_SET.exists(deps.storage) {
         return Err(ContractError::WorkerSetIsNotSet.into())
@@ -172,7 +167,6 @@ fn construct_signer_list_set_proof(
         deps.storage,
         config,
         cur_worker_set,
-        latest_ledger_index,
     )?;
 
     NEXT_WORKER_SET.save(deps.storage, tx_hash.clone(), &new_worker_set)?;
@@ -189,7 +183,6 @@ fn construct_signer_list_set_proof(
 fn construct_ticket_create_proof(
     storage: &mut dyn Storage,
     config: &Config,
-    latest_ledger_index: u32,
 ) -> Result<Response, ContractError> {
     let ticket_count = xrpl_multisig::available_ticket_count(storage)?;
     if ticket_count < config.ticket_count_threshold {
@@ -200,7 +193,6 @@ fn construct_ticket_create_proof(
         storage,
         config,
         ticket_count,
-        latest_ledger_index,
     )?;
 
     let response = start_signing_session(
@@ -251,17 +243,17 @@ pub fn execute(
     };
 
     let res = match msg {
-        ExecuteMsg::ConstructProof(message_id, latest_ledger_index) => {
-            construct_payment_proof(deps, info, &config, message_id, latest_ledger_index)
+        ExecuteMsg::ConstructProof(message_id) => {
+            construct_payment_proof(deps, info, &config, message_id)
         },
-        ExecuteMsg::UpdateWorkerSet(latest_ledger_index) => {
-            construct_signer_list_set_proof(deps, env, &config, latest_ledger_index)
+        ExecuteMsg::UpdateWorkerSet() => {
+            construct_signer_list_set_proof(deps, env, &config)
         },
         ExecuteMsg::UpdateTxStatus(tx_hash) => {
             update_tx_status(deps, tx_hash)
         },
-        ExecuteMsg::TicketCreate(latest_ledger_index) => {
-            construct_ticket_create_proof(deps.storage, &config, latest_ledger_index)
+        ExecuteMsg::TicketCreate() => {
+            construct_ticket_create_proof(deps.storage, &config)
         },
     }?;
 

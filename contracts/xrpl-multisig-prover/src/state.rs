@@ -15,7 +15,6 @@ pub struct Config {
     pub service_name: String,
     pub worker_set_diff_threshold: u32,
     pub xrpl_fee: u64,
-    pub last_ledger_sequence_offset: u32,
     pub ticket_count_threshold: u32,
 }
 

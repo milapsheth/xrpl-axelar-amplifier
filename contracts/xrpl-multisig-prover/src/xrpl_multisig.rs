@@ -9,21 +9,9 @@ use serde_json;
 
 use crate::{
     error::ContractError,
-    state::{Config, LAST_ASSIGNED_TICKET_NUMBER, AVAILABLE_TICKETS, TRANSACTION_INFO, LATEST_TICKET_CREATE_TX_HASH, NEXT_SEQUENCE_NUMBER},
+    state::{Config, LAST_ASSIGNED_TICKET_NUMBER, AVAILABLE_TICKETS, TRANSACTION_INFO, LATEST_TICKET_CREATE_TX_HASH, NEXT_SEQUENCE_NUMBER, CONFIRMED_TRANSACTIONS},
     types::*, axelar_workers::{WorkerSet, AxelarSigner},
 };
-
-/*
-    // Administer tickets, sequence numbers, unsigned tx generation
-    XRPLMultisig(storage, address, sequence_number, PastTransactions: (Map<TxHash, TxInfo>,Map<SeqNumber, TxHash>)
-    IssueTicketCreate(ticket_count | max, last_ledger_index) -> UnsignedTx
-    IssuePayment(destination, amount, currency, last_ledger_index) -> UnsignedTx
-    IssueSignerListSet(new_worker_set, last_ledger_index) -> UnsignedTx
-    IssueTrustLine(account, amount, last_ledger_index) -> UnsignedTx
-    UpdateTxStatus(TxHash, Status) -> ()
-    // GetTxStatus(TxHash) -> TxStatus
-    // IsPendingTicketCreate() -> bool
-*/
 
 fn itoa_serialize<S>(x: &u64, s: S) -> Result<S::Ok, S::Error>
 where
@@ -69,7 +57,6 @@ pub struct XRPLTxCommonFields {
     pub fee: u64,
     pub sequence: Sequence,
     pub signing_pub_key: String,
-    pub last_ledger_sequence: u32,
 }
 
 #[cw_serde]
@@ -155,31 +142,6 @@ impl TryInto<HexBinary> for XRPLSignedTransaction {
     }
 }
 
-/*impl Serialize for XRPLUnsignedPaymentTransaction {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut state = serializer.serialize_struct("tx", 3)?;
-        state.serialize_field("TransactionType", "Payment")?;
-        state.serialize_field("Account", &self.account)?;
-        state.serialize_field("Fee", &self.fee.to_string())?;
-        match &self.sequence {
-            Sequence::Plain(sequence) => {
-                state.serialize_field("Sequence", &sequence)?;
-            }
-            Sequence::Ticket(ticket) => {
-                state.serialize_field("Sequence", "0")?;
-                state.serialize_field("TicketSequence", &ticket)?;
-            }
-        }
-        state.serialize_field("Amount", &self.amount)?;
-        state.serialize_field("Destination", &self.destination)?;
-        state.serialize_field("SigningPubKey", &self.signing_pub_key)?;
-        state.end()
-    }
-}*/
-
 pub const HASH_PREFIX_UNSIGNED_TRANSACTION_MULTI: [u8; 4] = [0x53, 0x4D, 0x54, 0x00];
 
 pub fn xrpl_hash(
@@ -212,7 +174,6 @@ pub fn available_ticket_count(storage: &mut dyn Storage) -> Result<u32, Contract
 fn construct_unsigned_tx(
     config: &Config,
     partial_unsigned_tx: XRPLPartialTx,
-    latest_ledger_index: u32,
     sequence: Sequence,
 ) -> XRPLUnsignedTx {
     let unsigned_tx_common = XRPLTxCommonFields {
@@ -220,7 +181,6 @@ fn construct_unsigned_tx(
         fee: config.xrpl_fee,
         sequence: sequence.clone(),
         signing_pub_key: "".to_string(),
-        last_ledger_sequence: latest_ledger_index + config.last_ledger_sequence_offset,
     };
 
     XRPLUnsignedTx {
@@ -242,13 +202,11 @@ fn issue_tx(
     storage: &mut dyn Storage,
     config: &Config,
     partial_unsigned_tx: XRPLPartialTx,
-    latest_ledger_index: u32,
     sequence: Sequence,
 ) -> Result<TxHash, ContractError> {
     let unsigned_tx = construct_unsigned_tx(
         config,
         partial_unsigned_tx,
-        latest_ledger_index,
         sequence.clone(),
     );
 
@@ -270,7 +228,7 @@ fn issue_tx(
     Ok(tx_hash)
 }
 
-pub fn issue_ticket_create(storage: &mut dyn Storage, config: &Config, ticket_count: u32, latest_ledger_index: u32) -> Result<TxHash, ContractError> {
+pub fn issue_ticket_create(storage: &mut dyn Storage, config: &Config, ticket_count: u32) -> Result<TxHash, ContractError> {
     let partial_unsigned_tx = XRPLPartialTx::TicketCreate {
         ticket_count,
     };
@@ -286,7 +244,6 @@ pub fn issue_ticket_create(storage: &mut dyn Storage, config: &Config, ticket_co
         storage,
         config,
         partial_unsigned_tx,
-        latest_ledger_index,
         Sequence::Plain(sequence_number)
     )?;
 
@@ -301,7 +258,7 @@ fn load_latest_ticket_create_tx_info(
     Ok(TRANSACTION_INFO.load(storage, latest_ticket_create_tx_hash.clone())?)
 }
 
-pub fn issue_payment(storage: &mut dyn Storage, config: &Config, destination: nonempty::String, amount: XRPLPaymentAmount, latest_ledger_index: u32) -> Result<TxHash, ContractError> {
+pub fn issue_payment(storage: &mut dyn Storage, config: &Config, destination: nonempty::String, amount: XRPLPaymentAmount) -> Result<TxHash, ContractError> {
     let partial_unsigned_tx = XRPLPartialTx::Payment {
         destination,
         amount,
@@ -312,8 +269,7 @@ pub fn issue_payment(storage: &mut dyn Storage, config: &Config, destination: no
         storage,
         config,
         partial_unsigned_tx,
-        latest_ledger_index,
-        Sequence::Ticket(ticket_number)
+        Sequence::Ticket(ticket_number),
     )
 }
 
@@ -350,7 +306,7 @@ pub fn make_xrpl_signer_entries(signers: BTreeSet<AxelarSigner>) -> Vec<XRPLSign
         ).collect()
 }
 
-pub fn issue_signer_list_set(storage: &mut dyn Storage, config: &Config, workers: WorkerSet, latest_ledger_index: u32) -> Result<TxHash, ContractError> {
+pub fn issue_signer_list_set(storage: &mut dyn Storage, config: &Config, workers: WorkerSet) -> Result<TxHash, ContractError> {
     let partial_unsigned_tx = XRPLPartialTx::SignerListSet {
         signer_quorum: workers.quorum,
         signer_entries: make_xrpl_signer_entries(workers.signers),
@@ -361,8 +317,7 @@ pub fn issue_signer_list_set(storage: &mut dyn Storage, config: &Config, workers
         storage,
         config,
         partial_unsigned_tx,
-        latest_ledger_index,
-        Sequence::Ticket(ticket_number)
+        Sequence::Ticket(ticket_number),
     )
 }
 
@@ -411,10 +366,9 @@ pub fn update_tx_status(storage: &mut dyn Storage, tx_hash: TxHash, new_status: 
         NEXT_SEQUENCE_NUMBER.save(storage, &(tx_sequence_number + sequence_number_increment))?;
     }
 
-    if new_status != TransactionStatus::FailedOffChain {
-        if let Sequence::Ticket(ticket_number) = tx_info.unsigned_contents.common.sequence {
-            mark_ticket_unavailable(storage, ticket_number)?;
-        }
+    if new_status == TransactionStatus::Succeeded || new_status == TransactionStatus::FailedOnChain {
+        CONFIRMED_TRANSACTIONS.save(storage, tx_sequence_number, &tx_hash)?;
+        mark_ticket_unavailable(storage, tx_sequence_number)?;
     }
 
     TRANSACTION_INFO.save(storage, tx_hash, &tx_info)?;
