@@ -112,19 +112,23 @@ fn convert_uint256_to_u16_unsafely(value: Uint256) -> u16 {
 // Converts a Vec<Uint256> to Vec<u16>, scaling down with precision loss, if necessary.
 // We make sure that XRPL multisig and Axelar multisig both use the same scaled down numbers and have the same precision loss
 fn convert_or_scale_weights(weights: Vec<Uint256>) -> Vec<u16> {
-    let max_weight: Uint256 = weights.iter().sum();
-    let max_u16_as_uint256 = Uint256::from(u16::MAX);
-
-    // Scaling down
-    weights
-        .into_iter()
-        .map(|weight| {
-            // TODO: test for small and large weights
-            // TODO: test that multiply_ratio uses floor division & the sum of the u16 values doesn't overflow
-            let scaled = weight.multiply_ratio(max_u16_as_uint256, total_weight);
-            convert_uint256_to_u16_unsafely(scaled)
-        })
-        .collect()
+    let max_weight: Option<&Uint256> = weights.iter().max();
+    match max_weight {
+        Some(max_weight) => {
+            let max_u16_as_uint256 = Uint256::from(u16::MAX);
+            // Scaling down
+            weights
+                .clone()
+                .into_iter()
+                .map(|weight| {
+                    // multiply_ratio returns a rounded down value
+                    let scaled = weight.multiply_ratio(max_u16_as_uint256, *max_weight);
+                    convert_uint256_to_u16_unsafely(scaled)
+                })
+                .collect()
+        },
+        None => vec![],
+    }
 }
 
 pub fn get_active_worker_set(
@@ -196,6 +200,36 @@ mod tests {
 
         let weights = vec![Uint256::from(1u128), Uint256::from(2u128), Uint256::from(3u128), Uint256::from(4u128)];
         let scaled_weights = convert_or_scale_weights(weights);
-        assert_eq!(scaled_weights, vec![16384, 32768, 49152, 65535]);
+        assert_eq!(scaled_weights, vec![16383, 32767, 49151, 65535]);
+
+        let weights = vec![
+            Uint256::MAX - Uint256::from(3u128),
+            Uint256::MAX - Uint256::from(2u128),
+            Uint256::MAX - Uint256::from(1u128),
+            Uint256::MAX
+        ];
+        let scaled_weights = convert_or_scale_weights(weights);
+        assert_eq!(scaled_weights, vec![65534, 65534, 65534, 65535]);
+
+        let weights = vec![
+            Uint256::from(0u128),
+            Uint256::from(1u128),
+            Uint256::MAX - Uint256::from(1u128),
+            Uint256::MAX
+        ];
+        let scaled_weights = convert_or_scale_weights(weights);
+        assert_eq!(scaled_weights, vec![0, 0, 65534, 65535]);
+
+        let weights = vec![
+            Uint256::from(100000u128),
+            Uint256::from(2000000u128),
+            Uint256::from(30000000u128),
+            Uint256::from(400000000u128),
+            Uint256::from(50000000000u128),
+        ];
+        let scaled_weights = convert_or_scale_weights(weights);
+        assert_eq!(scaled_weights, vec![0, 2, 39, 524, 65535]);
+
+        assert_eq!(convert_or_scale_weights(vec![] as Vec<Uint256>), vec![] as Vec<u16>);
     }
 }
