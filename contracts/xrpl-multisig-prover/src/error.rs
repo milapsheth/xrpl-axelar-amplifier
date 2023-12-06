@@ -55,6 +55,12 @@ pub enum ContractError {
 
     #[error("worker set is not set")]
     WorkerSetIsNotSet,
+
+    #[error("invalid address")]
+    InvalidAddress,
+
+    #[error("invalid currency")]
+    InvalidCurrency,
 }
 
 impl From<ContractError> for StdError {
