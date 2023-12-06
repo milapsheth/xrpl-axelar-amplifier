@@ -133,6 +133,7 @@ fn construct_payment_proof(
         config,
         message.destination_address.to_string().try_into()?,
         xrpl_payment_amount,
+        message_id,
     )?;
 
     Ok(

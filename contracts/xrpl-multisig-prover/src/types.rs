@@ -1,4 +1,5 @@
 use axelar_wasm_std::nonempty;
+use connection_router::state::CrossChainId;
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{from_binary, HexBinary, StdResult, Uint256};
 use cw_storage_plus::{Key, KeyDeserialize, PrimaryKey};
@@ -45,6 +46,7 @@ pub struct TransactionInfo {
     pub status: TransactionStatus,
     // TODO: save only the hash of the unsigned tx
     pub unsigned_contents: XRPLUnsignedTx,
+    pub message_id: Option<CrossChainId>,
 }
 
 impl From<HexBinary> for TxHash {

@@ -1,4 +1,5 @@
 use axelar_wasm_std::Threshold;
+use connection_router::state::CrossChainId;
 use cosmwasm_std::Addr;
 use cw_storage_plus::{Item, Map};
 use cosmwasm_schema::cw_serde;
@@ -31,9 +32,11 @@ pub const MULTISIG_SESSION_TX: Map<u64, TxHash> = Map::new("multisig_session_tx"
 pub const NEXT_SEQUENCE_NUMBER: Item<u32> = Item::new("next_sequence_number");
 pub const LAST_ASSIGNED_TICKET_NUMBER: Item<u32> = Item::new("last_assigned_ticket_number");
 
+pub const MESSAGE_ID_TO_TICKET: Map<CrossChainId, u32> = Map::new("message_id_to_ticket");
+pub const CONFIRMED_TRANSACTIONS: Map<u32, TxHash> = Map::new("confirmed_transactions");
 pub const AVAILABLE_TICKETS: Item<Vec<u32>> = Item::new("available_tickets");
 pub const TRANSACTION_INFO: Map<TxHash, TransactionInfo> = Map::new("transaction_info");
-pub const LATEST_TICKET_CREATE_TX_HASH: Item<TxHash> = Item::new("latest_ticket_create_tx_hash");
+pub const LATEST_SEQUENTIAL_TX_HASH: Item<TxHash> = Item::new("latest_sequential_tx_hash");
 
 pub const TOKENS: Map<String, XRPLToken> = Map::new("tokens");
 

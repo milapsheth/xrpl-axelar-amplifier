@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use axelar_wasm_std::nonempty;
+use connection_router::state::CrossChainId;
 use cosmwasm_schema::{cw_serde, serde::Serializer};
 use cosmwasm_std::{Storage, HexBinary};
 use ripemd::Ripemd160;
@@ -9,7 +10,7 @@ use serde_json;
 
 use crate::{
     error::ContractError,
-    state::{Config, LAST_ASSIGNED_TICKET_NUMBER, AVAILABLE_TICKETS, TRANSACTION_INFO, LATEST_TICKET_CREATE_TX_HASH, NEXT_SEQUENCE_NUMBER, CONFIRMED_TRANSACTIONS},
+    state::{Config, LAST_ASSIGNED_TICKET_NUMBER, AVAILABLE_TICKETS, TRANSACTION_INFO, NEXT_SEQUENCE_NUMBER, CONFIRMED_TRANSACTIONS, MESSAGE_ID_TO_TICKET, LATEST_SEQUENTIAL_TX_HASH},
     types::*, axelar_workers::{WorkerSet, AxelarSigner},
 };
 
@@ -156,7 +157,7 @@ pub fn xrpl_hash(
     half_hash
 }
 
-fn get_next_ticket_number(storage: &dyn Storage) -> Result<u32, ContractError> {
+pub fn get_next_ticket_number(storage: &dyn Storage) -> Result<u32, ContractError> {
     let last_assigned_ticket_number = LAST_ASSIGNED_TICKET_NUMBER.load(storage)?;
     let available_tickets = AVAILABLE_TICKETS.load(storage)?;
 
@@ -203,6 +204,7 @@ fn issue_tx(
     config: &Config,
     partial_unsigned_tx: XRPLPartialTx,
     sequence: Sequence,
+    message_id: Option<CrossChainId>,
 ) -> Result<TxHash, ContractError> {
     let unsigned_tx = construct_unsigned_tx(
         config,
@@ -218,14 +220,30 @@ fn issue_tx(
         &TransactionInfo {
             status: TransactionStatus::Pending,
             unsigned_contents: unsigned_tx.clone(),
+            message_id,
         }
     )?;
 
-    if let Sequence::Ticket(ticket_number) = sequence {
-        LAST_ASSIGNED_TICKET_NUMBER.save(storage, &ticket_number)?;
-    }
+    match sequence {
+        Sequence::Ticket(ticket_number) => {
+            LAST_ASSIGNED_TICKET_NUMBER.save(storage, &ticket_number)?;
+        },
+        Sequence::Plain(_) => {
+            LATEST_SEQUENTIAL_TX_HASH.save(storage, &tx_hash)?;
+        },
+    };
 
     Ok(tx_hash)
+}
+
+fn get_next_sequence_number(storage: &dyn Storage) -> Result<u32, ContractError> {
+    let latest_sequential_tx_info = load_latest_sequential_tx_info(storage)?;
+    let sequence_number = if latest_sequential_tx_info.status == TransactionStatus::Pending {
+        latest_sequential_tx_info.unsigned_contents.common.sequence.clone().into()
+    } else {
+        NEXT_SEQUENCE_NUMBER.load(storage)?
+    };
+    Ok(sequence_number)
 }
 
 pub fn issue_ticket_create(storage: &mut dyn Storage, config: &Config, ticket_count: u32) -> Result<TxHash, ContractError> {
@@ -233,43 +251,46 @@ pub fn issue_ticket_create(storage: &mut dyn Storage, config: &Config, ticket_co
         ticket_count,
     };
 
-    let latest_ticket_create_tx_info = load_latest_ticket_create_tx_info(storage)?;
-    let sequence_number = if latest_ticket_create_tx_info.status == TransactionStatus::Pending {
-        latest_ticket_create_tx_info.unsigned_contents.common.sequence.clone().into()
-    } else {
-        NEXT_SEQUENCE_NUMBER.load(storage)?
-    };
+    let sequence_number = get_next_sequence_number(storage)?;
 
     let tx_hash = issue_tx(
         storage,
         config,
         partial_unsigned_tx,
-        Sequence::Plain(sequence_number)
+        Sequence::Plain(sequence_number),
+        None,
     )?;
 
-    LATEST_TICKET_CREATE_TX_HASH.save(storage, &tx_hash)?;
     Ok(tx_hash)
 }
 
-fn load_latest_ticket_create_tx_info(
+fn load_latest_sequential_tx_info(
     storage: &dyn Storage,
 ) -> Result<TransactionInfo, ContractError> {
-    let latest_ticket_create_tx_hash = LATEST_TICKET_CREATE_TX_HASH.load(storage)?;
-    Ok(TRANSACTION_INFO.load(storage, latest_ticket_create_tx_hash.clone())?)
+    let latest_sequential_tx_hash = LATEST_SEQUENTIAL_TX_HASH.load(storage)?;
+    Ok(TRANSACTION_INFO.load(storage, latest_sequential_tx_hash.clone())?)
 }
 
-pub fn issue_payment(storage: &mut dyn Storage, config: &Config, destination: nonempty::String, amount: XRPLPaymentAmount) -> Result<TxHash, ContractError> {
+pub fn issue_payment(
+    storage: &mut dyn Storage,
+    config: &Config,
+    destination: nonempty::String,
+    amount: XRPLPaymentAmount,
+    message_id: CrossChainId,
+) -> Result<TxHash, ContractError> {
     let partial_unsigned_tx = XRPLPartialTx::Payment {
         destination,
         amount,
     };
 
-    let ticket_number = get_next_ticket_number(storage)?;
+    let ticket_number = assign_ticket_number(storage, message_id.clone())?;
+
     issue_tx(
         storage,
         config,
         partial_unsigned_tx,
         Sequence::Ticket(ticket_number),
+        Some(message_id),
     )
 }
 
@@ -312,12 +333,13 @@ pub fn issue_signer_list_set(storage: &mut dyn Storage, config: &Config, workers
         signer_entries: make_xrpl_signer_entries(workers.signers),
     };
 
-    let ticket_number = get_next_ticket_number(storage)?;
+    let sequence_number = get_next_sequence_number(storage)?;
     issue_tx(
         storage,
         config,
         partial_unsigned_tx,
-        Sequence::Ticket(ticket_number),
+        Sequence::Plain(sequence_number),
+        None,
     )
 }
 
@@ -373,6 +395,32 @@ pub fn update_tx_status(storage: &mut dyn Storage, tx_hash: TxHash, new_status: 
 
     TRANSACTION_INFO.save(storage, tx_hash, &tx_info)?;
     Ok(())
+}
+
+// A message ID can be ticketed a different ticket number
+// only if the previous ticket number has been consumed
+// by a TX that doesn't correspond to this message.
+pub fn assign_ticket_number(storage: &mut dyn Storage, message_id: CrossChainId) -> Result<u32, ContractError> {
+    // If this message ID has already been ticketed,
+    // then use the same ticket number as before,
+    if let Some(ticket_number) = MESSAGE_ID_TO_TICKET.may_load(storage, message_id.clone())? {
+        // as long as it has not already been consumed
+        let confirmed_tx_hash = CONFIRMED_TRANSACTIONS.may_load(storage, ticket_number)?;
+        if confirmed_tx_hash.is_none() {
+            return Ok(ticket_number)
+        }
+
+        // or if it has been consumed by the same transactions.
+        let tx_info = TRANSACTION_INFO.load(storage, confirmed_tx_hash.unwrap())?;
+        if tx_info.message_id.map_or(false, |id| id == message_id) {
+            return Ok(ticket_number)
+        }
+    }
+
+    // Otherwise, use the next available ticket number.
+    let new_ticket_number = get_next_ticket_number(storage)?;
+    MESSAGE_ID_TO_TICKET.save(storage, message_id, &new_ticket_number)?;
+    Ok(new_ticket_number)
 }
 
 #[cfg(test)]
