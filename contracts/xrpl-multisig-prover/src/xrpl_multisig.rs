@@ -280,7 +280,7 @@ pub fn amount_to_bytes(amount: XRPLTokenAmount) -> Result<Vec<u8>, ContractError
         exponent -= 1;
     }
 
-    /* 
+    /*
     TODO: Discuss with Ripple team, the below is part of the reference implementation
     https://github.com/XRPLF/rippled/blob/master/src/ripple/protocol/impl/STAmount.cpp#L795
     However it leads to least significant digits being dropped off from the mantissa */
@@ -384,8 +384,8 @@ pub fn serialize_signer(signer: &XRPLSigner) -> Result<Vec<u8>, ContractError> {
     let mut result: Vec<u8> = Vec::new();
     result.extend(field_id(OBJECT_TYPE_CODE, 16));
     result.extend(serialize_account_id(1, signer.account.clone())?);
-    result.extend(serialize_blob(3, hex::decode(signer.signing_pub_key.clone()).map_err(|_| ContractError::InvalidSigningPubKey)?).ok_or(ContractError::InvalidSigningPubKey)?);
-    result.extend(serialize_blob(4, hex::decode(signer.txn_signature.clone()).map_err(|_| ContractError::InvalidSignature)?).ok_or(ContractError::InvalidSignature)?);
+    result.extend(serialize_blob(3, signer.signing_pub_key.clone().as_slice().to_vec()).ok_or(ContractError::InvalidSigningPubKey)?);
+    result.extend(serialize_blob(4, signer.txn_signature.clone().as_slice().to_vec()).ok_or(ContractError::InvalidSignature)?);
     result.extend(field_id(OBJECT_TYPE_CODE, 1));
     Ok(result)
 }
@@ -744,7 +744,7 @@ mod tests {
     #[test]
     fn serialize_xrpl_unsigned_token_payment_transaction() {
         let unsigned_tx = XRPLUnsignedTx {
-            common: XRPLTxCommonFields { 
+            common: XRPLTxCommonFields {
                 account: "r9LqNeG6qHxjeUocjvVki2XR35weJ9mZgQ".to_string(),
                 fee: 12,
                 sequence: Sequence::Plain(1),
@@ -771,7 +771,7 @@ mod tests {
     #[test]
     fn serialize_xrpl_unsigned_xrp_payment_transaction() {
         let unsigned_tx = XRPLUnsignedTx {
-            common: XRPLTxCommonFields { 
+            common: XRPLTxCommonFields {
                 account: "r9LqNeG6qHxjeUocjvVki2XR35weJ9mZgQ".to_string(),
                 fee: 10,
                 sequence: Sequence::Plain(1),
@@ -787,13 +787,31 @@ mod tests {
             "534D5400120000220000000024000000016140000000000003E868400000000000000A730081145B812C9D57731E27A2DA8B1830195F88EF32A3B68314B5F762798A53D543A014CAF8B297CFF8F2F937E8",
             hex::encode_upper(encoded_unsigned_tx)
         );
+
+        let unsigned_tx = XRPLUnsignedTx {
+            common: XRPLTxCommonFields {
+                account: "rhKnz85JUKcrAizwxNUDfqCvaUi9ZMhuwj".to_string(),
+                fee: 3,
+                sequence: Sequence::Plain(43497363),
+                signing_pub_key: "".to_string(),
+            },
+            partial: XRPLPartialTx::Payment {
+                amount: XRPLPaymentAmount::Drops(1000000000),
+                destination: nonempty::String::try_from("rw2521mDNXyKzHBrFGZ5Rj4wzUjS9FbiZq").unwrap(),
+            }
+        };
+        let encoded_unsigned_tx = serialize_unsigned_tx(unsigned_tx).unwrap();
+        assert_eq!(
+            "534D54001200002200000000240297B79361400000003B9ACA0068400000000000000373008114245409103F1B06F22FBCED389AAE0EFCE2F6689A83146919924835FA51D3991CDF5CF4505781227686E6",
+            hex::encode_upper(encoded_unsigned_tx)
+        );
     }
 
     #[test]
     fn serialize_xrpl_signed_xrp_payment_transaction() {
         let signed_tx = XRPLSignedTransaction {
             unsigned_tx: XRPLUnsignedTx {
-                common: XRPLTxCommonFields { 
+                common: XRPLTxCommonFields {
                     account: "r9LqNeG6qHxjeUocjvVki2XR35weJ9mZgQ".to_string(),
                     fee: 10,
                     sequence: Sequence::Plain(1),
@@ -819,6 +837,37 @@ mod tests {
         let encoded_signed_tx = serialize_signed_tx(signed_tx).unwrap();
         assert_eq!(
             "534D5400120000220000000024000000016140000000000003E868400000000000000A730081145B812C9D57731E27A2DA8B1830195F88EF32A3B68314B5F762798A53D543A014CAF8B297CFF8F2F937E8",
+            hex::encode_upper(encoded_signed_tx)
+        );
+
+        let signed_tx = XRPLSignedTransaction {
+            unsigned_tx: XRPLUnsignedTx {
+                common: XRPLTxCommonFields {
+                    account: "rhKnz85JUKcrAizwxNUDfqCvaUi9ZMhuwj".to_string(),
+                    fee: 30,
+                    sequence: Sequence::Plain(43497365),
+                    signing_pub_key: "".to_string(),
+                },
+                partial: XRPLPartialTx::Payment {
+                    amount: XRPLPaymentAmount::Drops(1000000000),
+                    destination: nonempty::String::try_from("rfgqgX62inhKsfti1NR6FeMS8NcQJCFniG").unwrap(),
+                }
+            }, signers: vec![
+                XRPLSigner{
+                    account: "rn7JWRhHvsvea6JMWYFuBB3MizMxbgKApf".to_string(),
+                    txn_signature: HexBinary::from(hex::decode("00CBEDBDD84D5B17EC0D24EDEA49AE78D33908E69D2885895BC0243458228E8FD5CEF5ABCA558C3518D97B0BBA1C4051BBB31AAD6E7808673562FA73FFB5F50B").unwrap()),
+                    signing_pub_key: HexBinary::from(hex::decode("EDDC432D6E86302084DCB8EBFA6EF7452DC8CBFA552D5F843D6BD1870EC9CD10F9").unwrap()),
+                },
+                XRPLSigner{
+                    account: "rM9pYgHGm1Mqohp13XfZh6kbESkQPpJAKF".to_string(),
+                    txn_signature: HexBinary::from(hex::decode("62B63EFF8ED37ACFA453A61EC98B13761EFE608E36EB437ABE42DC86B73C3114B2ED5E6C3E9428E82DC4AAB9E4A093C00F041F6F32A5392FDAEF858142F0CE02").unwrap()),
+                    signing_pub_key: HexBinary::from(hex::decode("ED1B88E8E246E395E0CD45153E1579B1B43D7C1DF9B5481A34AABC43FF8562B435").unwrap()),
+                }
+            ]
+        };
+        let encoded_signed_tx = serialize_signed_tx(signed_tx).unwrap();
+        assert_eq!(
+            "1200002200000000240297B79561400000003B9ACA0068400000000000001E73008114245409103F1B06F22FBCED389AAE0EFCE2F6689A831449599D50E0C1AC0CFC8D3B2A30830F3738EACC3EF3E0107321EDDC432D6E86302084DCB8EBFA6EF7452DC8CBFA552D5F843D6BD1870EC9CD10F9744000CBEDBDD84D5B17EC0D24EDEA49AE78D33908E69D2885895BC0243458228E8FD5CEF5ABCA558C3518D97B0BBA1C4051BBB31AAD6E7808673562FA73FFB5F50B8114310A592CA22E8B35B819464F8A581A36C91DE857E1E0107321ED1B88E8E246E395E0CD45153E1579B1B43D7C1DF9B5481A34AABC43FF8562B435744062B63EFF8ED37ACFA453A61EC98B13761EFE608E36EB437ABE42DC86B73C3114B2ED5E6C3E9428E82DC4AAB9E4A093C00F041F6F32A5392FDAEF858142F0CE028114DCE722505E32B29932618C5C9819AAEA03754AA5E1F1",
             hex::encode_upper(encoded_signed_tx)
         );
     }
