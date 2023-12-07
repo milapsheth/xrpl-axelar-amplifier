@@ -196,6 +196,8 @@ const UINT32_TYPE_CODE: u8 = 2;
 const AMOUNT_TYPE_CODE: u8 = 6;
 const BLOB_TYPE_CODE: u8 = 7;
 const ACCOUNT_ID_TYPE_CODE: u8 = 8;
+const ARRAY_TYPE_CODE: u8 = 14;
+const OBJECT_TYPE_CODE: u8 = 15;
 
 // field ids and type codes from here
 // https://github.com/XRPLF/xrpl.js/blob/main/packages/ripple-binary-codec/src/enums/definitions.json
@@ -378,6 +380,26 @@ pub fn serialize_blob(field_code: u8, blob: Vec<u8>) -> Option<Vec<u8>> {
     Some(result)
 }
 
+pub fn serialize_signer(signer: &XRPLSigner) -> Result<Vec<u8>, ContractError> {
+    let mut result: Vec<u8> = Vec::new();
+    result.extend(field_id(OBJECT_TYPE_CODE, 16));
+    result.extend(serialize_account_id(1, signer.account.clone())?);
+    result.extend(serialize_blob(3, hex::decode(signer.signing_pub_key.clone()).map_err(|_| ContractError::InvalidSigningPubKey)?).ok_or(ContractError::InvalidSigningPubKey)?);
+    result.extend(serialize_blob(4, hex::decode(signer.txn_signature.clone()).map_err(|_| ContractError::InvalidSignature)?).ok_or(ContractError::InvalidSignature)?);
+    result.extend(field_id(OBJECT_TYPE_CODE, 1));
+    Ok(result)
+}
+
+pub fn serialize_signers_array(field_code: u8, signers: Vec<XRPLSigner>) -> Result<Vec<u8>, ContractError> {
+    let mut result: Vec<u8> = Vec::new();
+    result.extend(field_id(ARRAY_TYPE_CODE, field_code));
+    for signer in &signers {
+        result.extend(serialize_signer(signer)?);
+    }
+    result.extend(field_id(ARRAY_TYPE_CODE, 1));
+    Ok(result)
+}
+
 pub fn serialize_account_id(field_code: u8, account_id: String) -> Result<Vec<u8>, ContractError> {
     let mut result: Vec<u8> = Vec::new();
     result.extend(field_id(ACCOUNT_ID_TYPE_CODE, field_code));
@@ -428,7 +450,55 @@ pub fn serialize_unsigned_payment_tx(common: XRPLTxCommonFields, amount: XRPLPay
 pub fn serialize_unsigned_tx(tx: XRPLUnsignedTx) -> Result<Vec<u8>, ContractError> {
     match tx.partial {
         XRPLPartialTx::Payment { amount, destination } => serialize_unsigned_payment_tx(tx.common, amount, destination),
-        _ => Ok(serde_json::to_string(&tx).map_err(|_| ContractError::SerializationFailed)?.as_bytes().to_vec())
+        _ => unimplemented!()
+    }
+}
+
+// TODO: each worker must append his decoded address to the serialized tx before signing
+pub fn serialize_signed_payment_tx(signers: Vec<XRPLSigner>, common: XRPLTxCommonFields, amount: XRPLPaymentAmount, destination: nonempty::String) -> Result<Vec<u8>, ContractError> {
+    let mut results: Vec<Vec<u8>> = Vec::new();
+    // value: 0, type:uint16, type_code: 1,  nth: 2, !isVLEncoded
+    // serialize_transaction_payment_type();
+    results.push(Vec::from((0x534D5400 as u32).to_be_bytes())); // prefix for multisignature signing
+    results.push(serialize_uint16(2, PAYMENT_TYPE));
+    results.push(serialize_uint32(2, 0));
+    match common.sequence {
+        Sequence::Plain(seq) => {
+            // type: Uint32, type_code: 2,  nth: 4, !isVLEncoded
+            // serialize_sequence(seq);
+            results.push(serialize_uint32(4, seq));
+        },
+        Sequence::Ticket(seq) => {
+            // type: Uint32, type_code: 2, nth: 4, !isVLEncoded
+            // serialize_sequence(seq)
+            results.push(serialize_uint32(4, 0));
+            // type: Uint32, type_code: 2, nth: 41, !isVLEncoded
+            // serialize_ticket_sequence(seq);
+            results.push(serialize_uint32(41, seq));
+        }
+    };
+    // type: Amount, type_code: 6, nth: 1, !isVLEncoded
+    results.push(serialize_amount(1, amount)?);
+    // type: Amount, type_code: 6, nth: 8, !isVLEncoded
+    results.push(serialize_amount(8, XRPLPaymentAmount::Drops(common.fee))?);
+    // type: Blob, type_code: 7, nth: 3, isVLEncoded
+    // TODO: hex::encode to slice?
+    results.push(serialize_blob(3, hex::decode("").unwrap()).unwrap());
+    // type: AccountId, type_code: 8, nth: 1, isVLEncoded
+    results.push(serialize_account_id(1, common.account)?);
+    // type: AccountId, type_code: 8, nth:3, isVLEncoded
+    results.push(serialize_account_id(3, destination.into())?);
+    // type: STArray, type_code: 14, nth:3, !isVLEncoded
+    results.push(serialize_signers_array(3, signers)?);
+
+    println!("hex parts {}", results.iter().map(|x| hex::encode(x)).collect::<Vec<String>>().join(","));
+    Ok(results.concat())
+}
+
+fn serialize_signed_tx(signed_tx: XRPLSignedTransaction) -> Result<Vec<u8>, ContractError> {
+    match signed_tx.unsigned_tx.partial {
+        XRPLPartialTx::Payment { amount, destination } => serialize_signed_payment_tx(signed_tx.signers, signed_tx.unsigned_tx.common, amount, destination),
+        _ => unimplemented!()
     }
 }
 
@@ -716,6 +786,40 @@ mod tests {
         assert_eq!(
             "534D5400120000220000000024000000016140000000000003E868400000000000000A730081145B812C9D57731E27A2DA8B1830195F88EF32A3B68314B5F762798A53D543A014CAF8B297CFF8F2F937E8",
             hex::encode_upper(encoded_unsigned_tx)
+        );
+    }
+
+    #[test]
+    fn serialize_xrpl_signed_xrp_payment_transaction() {
+        let signed_tx = XRPLSignedTransaction {
+            unsigned_tx: XRPLUnsignedTx {
+                common: XRPLTxCommonFields { 
+                    account: "r9LqNeG6qHxjeUocjvVki2XR35weJ9mZgQ".to_string(),
+                    fee: 10,
+                    sequence: Sequence::Plain(1),
+                    signing_pub_key: "".to_string(),
+                },
+                partial: XRPLPartialTx::Payment {
+                    amount: XRPLPaymentAmount::Drops(1000),
+                    destination: nonempty::String::try_from("rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh").unwrap(),
+                }
+            }, signers: vec![
+                XRPLSigner{
+                    account: "".to_string(),
+                    txn_signature: HexBinary::from(hex::decode("").unwrap()),
+                    signing_pub_key: HexBinary::from(hex::decode("").unwrap()),
+                },
+                XRPLSigner{
+                    account: "".to_string(),
+                    txn_signature: HexBinary::from(hex::decode("").unwrap()),
+                    signing_pub_key: HexBinary::from(hex::decode("").unwrap()),
+                }
+            ]
+        };
+        let encoded_signed_tx = serialize_signed_tx(signed_tx).unwrap();
+        assert_eq!(
+            "534D5400120000220000000024000000016140000000000003E868400000000000000A730081145B812C9D57731E27A2DA8B1830195F88EF32A3B68314B5F762798A53D543A014CAF8B297CFF8F2F937E8",
+            hex::encode_upper(encoded_signed_tx)
         );
     }
 

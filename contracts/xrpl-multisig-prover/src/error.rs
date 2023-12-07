@@ -61,6 +61,12 @@ pub enum ContractError {
 
     #[error("invalid currency")]
     InvalidCurrency,
+
+    #[error("invalid signing pub key")]
+    InvalidSigningPubKey,
+
+    #[error("invalid transaction signature")]
+    InvalidSignature,
 }
 
 impl From<ContractError> for StdError {
