@@ -8,6 +8,8 @@ use crate::{error::ContractError, types::*};
 const PAYMENT_TX_TYPE: u16 = 0;
 const TICKET_CREATE_TX_TYPE: u16 = 10;
 const SIGNER_LIST_SET_TX_TYPE: u16 = 12;
+const TRUST_SET_TX_TYPE: u16 = 20;
+
 const POSITIVE_BIT: u64 = 0x4000000000000000;
 
 #[derive(Clone)]
@@ -32,6 +34,7 @@ pub enum Field {
     TicketCount,
     Signers,
     Signer,
+    LimitAmount
 }
 
 impl Field {
@@ -57,6 +60,7 @@ impl Field {
             Field::TicketCount => 40,
             Field::Signers => 3,
             Field::Signer => 16,
+            Field::LimitAmount => 3,
         }
     }
 }
@@ -279,6 +283,23 @@ impl TryInto<XRPLObject> for XRPLTicketCreateTx {
             TransactionType: TICKET_CREATE_TX_TYPE,
             Flags: 0u32,
             TicketCount: self.ticket_count,
+            Fee: XRPLPaymentAmount::Drops(self.fee),
+            Account: self.account,
+            SigningPubKey: HexBinary::from(vec![]),
+        });
+        obj.add_sequence(self.sequence)?;
+        Ok(obj)
+    }
+}
+
+impl TryInto<XRPLObject> for XRPLTrustSetTx {
+    type Error = ContractError;
+
+    fn try_into(self) -> Result<XRPLObject, ContractError> {
+        let mut obj = xrpl_json!({
+            TransactionType: TRUST_SET_TX_TYPE,
+            Flags: 0u32,
+            LimitAmount: XRPLPaymentAmount::Token(self.token, XRPLTokenAmount::MAX),
             Fee: XRPLPaymentAmount::Drops(self.fee),
             Account: self.account,
             SigningPubKey: HexBinary::from(vec![]),
