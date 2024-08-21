@@ -220,6 +220,14 @@ pub struct XRPLTicketCreateTx {
 }
 
 #[cw_serde]
+pub struct XRPLTrustSetTx {
+    pub token: XRPLToken,
+    pub account: XRPLAccountId,
+    pub fee: u64,
+    pub sequence: XRPLSequence,
+}
+
+#[cw_serde]
 pub struct XRPLAccountId([u8; 20]);
 
 impl XRPLAccountId {
@@ -378,6 +386,11 @@ pub struct XRPLTokenAmount {
 }
 
 impl XRPLTokenAmount {
+    pub const MAX: XRPLTokenAmount = XRPLTokenAmount {
+        mantissa: MAX_MANTISSA,
+        exponent: MAX_EXPONENT,
+    };
+
     pub fn new(mantissa: u64, exponent: i64) -> Self {
         assert!(
             mantissa == 0
