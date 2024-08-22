@@ -2,7 +2,7 @@ use std::fmt;
 use std::fmt::Display;
 
 use axelar_wasm_std::VerificationStatus;
-use connection_router_api::CrossChainId;
+use router_api::CrossChainId;
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{from_json, Binary, HexBinary, StdResult, Uint128, Uint256};
 use cw_storage_plus::{Key, KeyDeserialize, PrimaryKey};
@@ -28,10 +28,12 @@ pub enum TransactionStatus {
 #[cw_serde]
 pub struct TxHash(pub HexBinary);
 
+pub const XRPL_MESSAGE_ID_FORMAT: axelar_wasm_std::msg_id::MessageIdFormat = axelar_wasm_std::msg_id::MessageIdFormat::HexTxHashAndEventIndex;
+
 impl TryFrom<CrossChainId> for TxHash {
     type Error = ContractError;
     fn try_from(cc_id: CrossChainId) -> Result<Self, ContractError> {
-        let (tx_id, _event_index) = parse_message_id(&cc_id.id)
+        let (tx_id, _event_index) = parse_message_id(cc_id.clone().id, &XRPL_MESSAGE_ID_FORMAT)
             .map_err(|_e| ContractError::InvalidMessageID(cc_id.id.to_string()))?;
         Ok(Self(HexBinary::from_hex(
             tx_id.to_ascii_lowercase().as_str(),
@@ -48,8 +50,8 @@ impl From<TxHash> for HexBinary {
 impl From<VerificationStatus> for TransactionStatus {
     fn from(status: VerificationStatus) -> TransactionStatus {
         match status {
-            VerificationStatus::SucceededOnChain => TransactionStatus::Succeeded,
-            VerificationStatus::FailedOnChain => TransactionStatus::FailedOnChain,
+            VerificationStatus::SucceededOnSourceChain => TransactionStatus::Succeeded,
+            VerificationStatus::FailedOnSourceChain => TransactionStatus::FailedOnChain,
             _ => TransactionStatus::Inconclusive,
         }
     }
@@ -288,17 +290,17 @@ pub struct XRPLSigner {
     pub signing_pub_key: PublicKey,
 }
 
-impl TryFrom<(multisig::msg::Signer, multisig::key::Signature)> for XRPLSigner {
+impl TryFrom<(String, multisig::msg::Signer)> for XRPLSigner {
     type Error = ContractError;
 
     fn try_from(
-        (axelar_signer, signature): (multisig::msg::Signer, multisig::key::Signature),
+        (signature, axelar_signer): (String, multisig::msg::Signer),
     ) -> Result<Self, ContractError> {
-        let txn_signature = match signature {
-            multisig::key::Signature::Ecdsa(_) | multisig::key::Signature::EcdsaRecoverable(_) => {
+        let txn_signature = match axelar_signer.pub_key {
+            multisig::key::PublicKey::Ecdsa(_) => {
                 HexBinary::from(
                     ecdsa::Signature::to_der(
-                        &ecdsa::Signature::try_from(signature.clone().as_ref())
+                        &ecdsa::Signature::try_from(signature.as_ref())
                             .map_err(|_| ContractError::FailedToEncodeSignature)?,
                     )
                     .to_vec(),

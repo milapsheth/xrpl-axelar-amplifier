@@ -1,4 +1,4 @@
-use connection_router_api::CrossChainId;
+use router_api::CrossChainId;
 use cosmwasm_std::{HexBinary, StdResult, Storage, Uint64};
 
 use multisig::key::PublicKey;
@@ -9,7 +9,7 @@ use crate::{
     error::ContractError,
     msg::GetProofResponse,
     querier::Querier,
-    state::{CURRENT_WORKER_SET, MULTISIG_SESSION_ID_TO_TX_HASH, TRANSACTION_INFO},
+    state::{CURRENT_VERIFIER_SET, MULTISIG_SESSION_ID_TO_TX_HASH, TRANSACTION_INFO},
     types::TransactionStatus,
     types::*,
     xrpl_multisig::{self, HASH_PREFIX_UNSIGNED_TX_MULTI_SIGNING},
@@ -66,9 +66,9 @@ pub fn get_proof(
         MultisigState::Pending => GetProofResponse::Pending { unsigned_tx_hash },
         MultisigState::Completed { .. } => {
             let xrpl_signers: Vec<XRPLSigner> = multisig_session
+                .verifier_set
                 .signers
                 .into_iter()
-                .filter_map(|(signer, sig)| sig.map(|sig| (signer, sig)))
                 .map(XRPLSigner::try_from)
                 .collect::<Result<Vec<_>, ContractError>>()?;
             let signed_tx = XRPLSignedTransaction::new(tx_info.unsigned_contents, xrpl_signers);
@@ -83,8 +83,8 @@ pub fn get_proof(
     Ok(response)
 }
 
-pub fn get_worker_set(storage: &dyn Storage) -> StdResult<multisig::worker_set::WorkerSet> {
-    Ok(CURRENT_WORKER_SET.load(storage)?.into())
+pub fn get_verifier_set(storage: &dyn Storage) -> StdResult<multisig::verifier_set::VerifierSet> {
+    Ok(CURRENT_VERIFIER_SET.load(storage)?.into())
 }
 
 pub fn get_multisig_session_id(

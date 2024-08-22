@@ -5,12 +5,12 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use axelar_wasm_std::Participant;
 use axelar_wasm_std::{nonempty, MajorityThreshold};
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{Addr, Fraction, HexBinary, Uint256};
+use cosmwasm_std::{Addr, Fraction, HexBinary, Uint128};
 use multisig::{
     key::{KeyType, PublicKey},
     msg::Signer,
 };
-use service_registry::state::WeightedWorker;
+use service_registry::state::WeightedVerifier;
 
 use crate::error::ContractError;
 use crate::querier::Querier;
@@ -25,7 +25,7 @@ pub struct AxelarSigner {
 
 impl From<AxelarSigner> for Participant {
     fn from(signer: AxelarSigner) -> Self {
-        let weight = nonempty::Uint256::try_from(Uint256::from(u128::from(signer.weight))).unwrap();
+        let weight = nonempty::Uint128::try_from(Uint128::from(u128::from(signer.weight))).unwrap();
         Self {
             address: signer.address,
             weight,
@@ -34,30 +34,30 @@ impl From<AxelarSigner> for Participant {
 }
 
 #[cw_serde]
-pub struct WorkerSet {
+pub struct VerifierSet {
     pub signers: BTreeSet<AxelarSigner>,
     pub quorum: u32,
-    // for hash uniqueness. The same exact worker set could be in use at two different times,
+    // for hash uniqueness. The same exact verifier set could be in use at two different times,
     // and we need to be able to distinguish between the two
     pub created_at: u64,
 }
 
-impl From<WorkerSet> for multisig::worker_set::WorkerSet {
-    fn from(worker_set: WorkerSet) -> Self {
-        let participants = worker_set
+impl From<VerifierSet> for multisig::verifier_set::VerifierSet {
+    fn from(verifier_set: VerifierSet) -> Self {
+        let participants = verifier_set
             .signers
             .into_iter()
             .map(|s| (s.clone().into(), s.pub_key))
             .collect();
-        multisig::worker_set::WorkerSet::new(
+        multisig::verifier_set::VerifierSet::new(
             participants,
-            Uint256::from(u128::from(worker_set.quorum)),
-            worker_set.created_at,
+            Uint128::from(u128::from(verifier_set.quorum)),
+            verifier_set.created_at,
         )
     }
 }
 
-impl WorkerSet {
+impl VerifierSet {
     pub fn pub_keys_by_address(&self) -> HashMap<String, (KeyType, HexBinary), RandomState> {
         self.signers
             .iter()
@@ -71,27 +71,28 @@ impl WorkerSet {
     }
 }
 
-fn convert_uint256_to_u16(value: Uint256) -> Result<u16, ContractError> {
-    if value > Uint256::from(u16::MAX) {
+// TODO: CHECK
+fn convert_uint128_to_u16(value: Uint128) -> Result<u16, ContractError> {
+    if value > Uint128::from(u16::MAX) {
         return Err(ContractError::GenericError(
             "Overflow, cannot convert value to u16".to_owned(),
         ));
     }
     let bytes = value.to_le_bytes();
-    Ok(u16::from(bytes[0]) | u16::from(bytes[1]).checked_shl(8).unwrap()) // this unwrap is never supposed to fail
+    Ok(u16::from(bytes[0]) | u16::from(bytes[1]).checked_shl(7).unwrap()) // this unwrap is never supposed to fail
 }
 
 // Converts a Vec<Uint256> to Vec<u16>, scaling down with precision loss, if necessary.
 // We make sure that XRPL multisig and Axelar multisig both use the same scaled down numbers and have the same precision loss
-fn convert_or_scale_weights(weights: &[Uint256]) -> Result<Vec<u16>, ContractError> {
-    let max_weight: Option<&Uint256> = weights.iter().max();
+fn convert_or_scale_weights(weights: &[Uint128]) -> Result<Vec<u16>, ContractError> {
+    let max_weight: Option<&Uint128> = weights.iter().max();
     match max_weight {
         Some(max_weight) => {
-            let max_u16_as_uint256 = Uint256::from(u16::MAX);
+            let max_u16_as_uint128 = Uint128::from(u16::MAX);
             let mut result = Vec::with_capacity(weights.len());
             for &weight in weights.iter() {
-                let scaled = weight.multiply_ratio(max_u16_as_uint256, *max_weight);
-                result.push(convert_uint256_to_u16(scaled)?);
+                let scaled = weight.multiply_ratio(max_u16_as_uint128, *max_weight);
+                result.push(convert_uint128_to_u16(scaled)?);
             }
 
             Ok(result)
@@ -100,14 +101,15 @@ fn convert_or_scale_weights(weights: &[Uint256]) -> Result<Vec<u16>, ContractErr
     }
 }
 
-pub fn get_active_worker_set(
+// TODO: refactor
+pub fn get_active_verifiers(
     querier: &Querier,
     signing_threshold: MajorityThreshold,
     block_height: u64,
-) -> Result<WorkerSet, ContractError> {
-    let workers: Vec<WeightedWorker> = querier.get_active_workers()?;
+) -> Result<VerifierSet, ContractError> {
+    let verifiers: Vec<WeightedVerifier> = querier.get_active_verifiers()?;
 
-    let participants: Vec<Participant> = workers
+    let participants: Vec<Participant> = verifiers
         .into_iter()
         .map(Participant::try_from)
         .filter_map(|result| result.ok())
@@ -116,8 +118,8 @@ pub fn get_active_worker_set(
     let weights = convert_or_scale_weights(
         participants
             .iter()
-            .map(|participant| Uint256::from(participant.weight))
-            .collect::<Vec<Uint256>>()
+            .map(|participant| Uint128::from(participant.weight))
+            .collect::<Vec<Uint128>>()
             .as_slice(),
     )?;
 
@@ -142,22 +144,22 @@ pub fn get_active_worker_set(
     )
     .unwrap();
 
-    let worker_set = WorkerSet {
+    let verifier_set = VerifierSet {
         signers: BTreeSet::from_iter(signers),
         quorum,
         created_at: block_height,
     };
 
-    Ok(worker_set)
+    Ok(verifier_set)
 }
 
-pub fn should_update_worker_set(
-    new_workers: &multisig::worker_set::WorkerSet,
-    cur_workers: &multisig::worker_set::WorkerSet,
+pub fn should_update_verifier_set(
+    new_verifiers: &multisig::verifier_set::VerifierSet,
+    cur_verifiers: &multisig::verifier_set::VerifierSet,
     max_diff: usize,
 ) -> bool {
-    new_workers.threshold != cur_workers.threshold
-        || signers_symetric_difference_count(&new_workers.signers, &cur_workers.signers) > max_diff
+    new_verifiers.threshold != cur_verifiers.threshold
+        || signers_symetric_difference_count(&new_verifiers.signers, &cur_verifiers.signers) > max_diff
 }
 
 fn signers_symetric_difference_count(
@@ -177,51 +179,51 @@ mod tests {
 
     #[test]
     fn test_convert_or_scale_weights() {
-        let weights = vec![Uint256::from(1u128), Uint256::from(1u128)];
+        let weights = vec![Uint128::from(1u128), Uint128::from(1u128)];
         let scaled_weights = convert_or_scale_weights(&weights).unwrap();
         assert_eq!(scaled_weights, vec![65535, 65535]);
 
         let weights = vec![
-            Uint256::from(1u128),
-            Uint256::from(2u128),
-            Uint256::from(3u128),
+            Uint128::from(1u128),
+            Uint128::from(2u128),
+            Uint128::from(3u128),
         ];
         let scaled_weights = convert_or_scale_weights(&weights).unwrap();
         assert_eq!(scaled_weights, vec![21845, 43690, 65535]);
 
         let weights = vec![
-            Uint256::from(1u128),
-            Uint256::from(2u128),
-            Uint256::from(3u128),
-            Uint256::from(4u128),
+            Uint128::from(1u128),
+            Uint128::from(2u128),
+            Uint128::from(3u128),
+            Uint128::from(4u128),
         ];
         let scaled_weights = convert_or_scale_weights(&weights).unwrap();
         assert_eq!(scaled_weights, vec![16383, 32767, 49151, 65535]);
 
         let weights = vec![
-            Uint256::MAX - Uint256::from(3u128),
-            Uint256::MAX - Uint256::from(2u128),
-            Uint256::MAX - Uint256::from(1u128),
-            Uint256::MAX,
+            Uint128::MAX - Uint128::from(3u128),
+            Uint128::MAX - Uint128::from(2u128),
+            Uint128::MAX - Uint128::from(1u128),
+            Uint128::MAX,
         ];
         let scaled_weights = convert_or_scale_weights(&weights).unwrap();
         assert_eq!(scaled_weights, vec![65534, 65534, 65534, 65535]);
 
         let weights = vec![
-            Uint256::from(0u128),
-            Uint256::from(1u128),
-            Uint256::MAX - Uint256::from(1u128),
-            Uint256::MAX,
+            Uint128::from(0u128),
+            Uint128::from(1u128),
+            Uint128::MAX - Uint128::from(1u128),
+            Uint128::MAX,
         ];
         let scaled_weights = convert_or_scale_weights(&weights).unwrap();
         assert_eq!(scaled_weights, vec![0, 0, 65534, 65535]);
 
         let weights = vec![
-            Uint256::from(100000u128),
-            Uint256::from(2000000u128),
-            Uint256::from(30000000u128),
-            Uint256::from(400000000u128),
-            Uint256::from(50000000000u128),
+            Uint128::from(100000u128),
+            Uint128::from(2000000u128),
+            Uint128::from(30000000u128),
+            Uint128::from(400000000u128),
+            Uint128::from(50000000000u128),
         ];
         let scaled_weights = convert_or_scale_weights(&weights).unwrap();
         assert_eq!(scaled_weights, vec![0, 2, 39, 524, 65535]);

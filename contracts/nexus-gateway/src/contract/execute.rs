@@ -1,11 +1,10 @@
-use cosmwasm_std::{to_binary, Addr, Response, WasmMsg};
+use cosmwasm_std::{to_json_binary, Addr, Response, WasmMsg};
 use error_stack::report;
 
+use super::Contract;
 use crate::error::ContractError;
 use crate::nexus;
 use crate::state::Store;
-
-use super::Contract;
 
 type Result<T> = error_stack::Result<T, ContractError>;
 
@@ -24,7 +23,7 @@ where
 
         let msgs: Vec<_> = msgs
             .into_iter()
-            .map(connection_router_api::Message::try_from)
+            .map(router_api::Message::try_from)
             .collect::<Result<Vec<_>>>()?;
         if msgs.is_empty() {
             return Ok(Response::default());
@@ -32,7 +31,7 @@ where
 
         Ok(Response::new().add_message(WasmMsg::Execute {
             contract_addr: self.config.router.to_string(),
-            msg: to_binary(&connection_router_api::msg::ExecuteMsg::RouteMessages(msgs))
+            msg: to_json_binary(&router_api::msg::ExecuteMsg::RouteMessages(msgs))
                 .expect("must serialize route-messages message"),
             funds: vec![],
         }))
@@ -41,7 +40,7 @@ where
     pub fn route_to_nexus(
         mut self,
         sender: Addr,
-        msgs: Vec<connection_router_api::Message>,
+        msgs: Vec<router_api::Message>,
     ) -> Result<Response<nexus::Message>> {
         if sender != self.config.router {
             return Err(report!(ContractError::Unauthorized));
@@ -67,14 +66,13 @@ where
 
 #[cfg(test)]
 mod test {
-    use cosmwasm_std::{from_binary, CosmosMsg};
+    use axelar_wasm_std::msg_id::HexTxHashAndEventIndex;
+    use cosmwasm_std::{from_json, CosmosMsg};
     use hex::decode;
-
-    use connection_router_api::CrossChainId;
-
-    use crate::state::{Config, MockStore};
+    use router_api::CrossChainId;
 
     use super::*;
+    use crate::state::{Config, MockStore};
 
     #[test]
     fn route_to_router_unauthorized() {
@@ -122,6 +120,16 @@ mod test {
             .returning(move || Ok(config.clone()));
         let contract = Contract::new(store);
 
+        let msg_ids = [
+            HexTxHashAndEventIndex {
+                tx_hash: vec![0x2f; 32].try_into().unwrap(),
+                event_index: 100,
+            },
+            HexTxHashAndEventIndex {
+                tx_hash: vec![0x23; 32].try_into().unwrap(),
+                event_index: 1000,
+            },
+        ];
         let msgs = vec![
             nexus::Message {
                 source_chain: "sourceChain".parse().unwrap(),
@@ -134,8 +142,9 @@ mod test {
                 .unwrap()
                 .try_into()
                 .unwrap(),
-                source_tx_id: vec![0x2f; 32].try_into().unwrap(),
-                source_tx_index: 100,
+                source_tx_id: msg_ids[0].tx_hash.to_vec().try_into().unwrap(),
+                source_tx_index: msg_ids[0].event_index as u64,
+                id: msg_ids[0].to_string(),
             },
             nexus::Message {
                 source_chain: "sourceChain".parse().unwrap(),
@@ -148,8 +157,9 @@ mod test {
                 .unwrap()
                 .try_into()
                 .unwrap(),
-                source_tx_id: vec![0x23; 32].try_into().unwrap(),
-                source_tx_index: 1000,
+                source_tx_id: msg_ids[1].tx_hash.to_vec().try_into().unwrap(),
+                source_tx_index: msg_ids[1].event_index as u64,
+                id: msg_ids[1].to_string(),
             },
         ];
         let res = contract.route_to_router(Addr::unchecked("nexus"), msgs);
@@ -165,9 +175,7 @@ mod test {
                     msg,
                     funds,
                 }) => {
-                    if let Ok(connection_router_api::msg::ExecuteMsg::RouteMessages(msgs)) =
-                        from_binary(msg)
-                    {
+                    if let Ok(router_api::msg::ExecuteMsg::RouteMessages(msgs)) = from_json(msg) {
                         return *contract_addr == Addr::unchecked("router")
                             && msgs.len() == 2
                             && funds.is_empty();
@@ -235,7 +243,7 @@ mod test {
         let contract = Contract::new(store);
 
         let msgs = vec![
-            connection_router_api::Message {
+            router_api::Message {
                 cc_id: CrossChainId {
                     chain: "sourceChain".parse().unwrap(),
                     id: "0x2fe4:0".parse().unwrap(),
@@ -250,7 +258,7 @@ mod test {
                 .try_into()
                 .unwrap(),
             },
-            connection_router_api::Message {
+            router_api::Message {
                 cc_id: CrossChainId {
                     chain: "sourceChain".parse().unwrap(),
                     id: "0x6b33:10".parse().unwrap(),
@@ -296,7 +304,7 @@ mod test {
         let contract = Contract::new(store);
 
         let msgs = vec![
-            connection_router_api::Message {
+            router_api::Message {
                 cc_id: CrossChainId {
                     chain: "sourceChain".parse().unwrap(),
                     id: "0x2fe4:0".parse().unwrap(),
@@ -311,7 +319,7 @@ mod test {
                 .try_into()
                 .unwrap(),
             },
-            connection_router_api::Message {
+            router_api::Message {
                 cc_id: CrossChainId {
                     chain: "sourceChain".parse().unwrap(),
                     id: "0x6b33:10".parse().unwrap(),

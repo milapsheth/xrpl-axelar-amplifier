@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use serde::Serialize;
-use connection_router_api::ChainName;
+use router_api::ChainName;
 use xrpl_http_client::{Amount, ResultCategory};
 use xrpl_http_client::{Memo, Transaction::Payment, Transaction};
 use axelar_wasm_std::voting::Vote;
@@ -81,12 +81,12 @@ pub fn verify_memos(amount: Amount, memos: Vec<Memo>, message: &Message) -> bool
             Amount::Drops(a) => ("XRP".to_string(), a),
         };
 
-        let expected_payload = ethers::abi::encode(&vec![
-            ethers::abi::Token::String(token),
-            ethers::abi::Token::Uint(ethers::types::U256::from_dec_str(amount.as_ref()).ok()?),
-            ethers::abi::Token::FixedBytes(hex::decode(remove_0x_prefix(memo_kv.get("payload_hash")?.clone())).ok()?),
+        let expected_payload = ethers_core::abi::encode(&vec![
+            ethers_core::abi::Token::String(token),
+            ethers_core::abi::Token::Uint(ethers_core::types::U256::from_dec_str(amount.as_ref()).ok()?),
+            ethers_core::abi::Token::FixedBytes(hex::decode(remove_0x_prefix(memo_kv.get("payload_hash")?.clone())).ok()?),
         ]);
-        let expected_payload_hash = ethers::utils::keccak256(expected_payload.clone());
+        let expected_payload_hash = ethers_core::utils::keccak256(expected_payload.clone());
 
         Some(memo_kv.get("destination_address") == Some(&remove_0x_prefix(message.destination_address.clone()).to_uppercase())
         && memo_kv.get("destination_chain") == Some(&hex::encode_upper(message.destination_chain.to_string()))
@@ -98,11 +98,13 @@ pub fn verify_memos(amount: Amount, memos: Vec<Memo>, message: &Message) -> bool
 mod test {
     use std::str::FromStr;
 
-    use crate::xrpl::{types::XRPLAddress, verifier::verify_memos};
-    use ethers::types::TxHash;
+    use crate::{types::Hash, xrpl::{types::XRPLAddress, verifier::verify_memos}};
+    use ethers_core::types::TxHash;
     use xrpl_http_client::{Amount, Memo};
     use crate::handlers::xrpl_verify_msg::Message;
-    use connection_router_api::ChainName;
+    use router_api::ChainName;
+
+    // TODO: add adapted EVM tests
 
     #[test]
     fn test_verify_memos() {
@@ -124,7 +126,7 @@ mod test {
             }
         ];
         let message = Message {
-            tx_id: crate::xrpl::types::TransactionId("1c6019555252bcb7bca95237d333a6c473112d6396d4f151a4a1c1f00f04f8f3".to_string()),
+            tx_id: Hash::random(),
             event_index: 14,
             source_address: XRPLAddress("raNVNWvhUQzFkDDTdEw3roXRJfMJFVJuQo".to_string()),
             destination_address: "0x592639c10223C4EC6C0ffc670e94d289A25DD1ad".to_string(),

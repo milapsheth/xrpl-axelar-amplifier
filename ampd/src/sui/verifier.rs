@@ -1,13 +1,67 @@
+use std::collections::HashMap;
+
 use axelar_wasm_std::voting::Vote;
-use bcs::to_bytes;
+use axelar_wasm_std::{self};
+use cosmwasm_std::HexBinary;
 use move_core_types::language_storage::StructTag;
-use serde::Deserialize;
+use serde::de::Error;
+use serde::{Deserialize, Deserializer};
 use sui_json_rpc_types::{SuiEvent, SuiTransactionBlockResponse};
 use sui_types::base_types::SuiAddress;
 
 use crate::handlers::sui_verify_msg::Message;
-use crate::handlers::sui_verify_worker_set::WorkerSetConfirmation;
+use crate::handlers::sui_verify_verifier_set::VerifierSetConfirmation;
 use crate::types::Hash;
+
+fn deserialize_from_str<'de, D, R>(deserializer: D) -> Result<R, D::Error>
+where
+    D: Deserializer<'de>,
+    R: std::str::FromStr,
+    R::Err: std::fmt::Display,
+{
+    let string: String = Deserialize::deserialize(deserializer)?;
+
+    R::from_str(&string).map_err(D::Error::custom)
+}
+
+fn deserialize_sui_bytes<'de, D, const LENGTH: usize>(
+    deserializer: D,
+) -> Result<[u8; LENGTH], D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let bytes: HashMap<String, String> = Deserialize::deserialize(deserializer)?;
+    let hex = bytes
+        .get("bytes")
+        .ok_or_else(|| D::Error::custom("missing bytes"))?
+        .trim_start_matches("0x");
+
+    hex::decode(hex)
+        .map_err(D::Error::custom)?
+        .try_into()
+        .map_err(|_| D::Error::custom(format!("failed deserialize into [u8; {}]", LENGTH)))
+}
+
+#[derive(Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct WeightedSigner {
+    pub_key: Vec<u8>,
+    #[serde(deserialize_with = "deserialize_from_str")]
+    weight: u128,
+}
+
+#[derive(Deserialize, Debug)]
+struct WeightedSigners {
+    signers: Vec<WeightedSigner>,
+    #[serde(deserialize_with = "deserialize_from_str")]
+    threshold: u128,
+    #[serde(deserialize_with = "deserialize_sui_bytes")]
+    nonce: [u8; 32],
+}
+
+#[derive(Deserialize, Debug)]
+struct SignersRotated {
+    signers: WeightedSigners,
+}
 
 #[derive(Deserialize)]
 struct ContractCall {
@@ -17,14 +71,9 @@ struct ContractCall {
     pub payload_hash: Hash,
 }
 
-#[derive(Deserialize)]
-struct OperatorshipTransferred {
-    pub payload: Vec<u8>,
-}
-
 enum EventType {
     ContractCall,
-    OperatorshipTransferred,
+    SignersRotated,
 }
 
 impl EventType {
@@ -32,12 +81,12 @@ impl EventType {
     fn struct_tag(&self, gateway_address: &SuiAddress) -> StructTag {
         let event = match self {
             EventType::ContractCall => "ContractCall",
-            EventType::OperatorshipTransferred => "OperatorshipTransferred",
+            EventType::SignersRotated => "SignersRotated",
         };
 
         let module = match self {
             EventType::ContractCall => "gateway",
-            EventType::OperatorshipTransferred => "validators",
+            EventType::SignersRotated => "auth",
         };
 
         format!("{}::{}::{}", gateway_address, module, event)
@@ -49,33 +98,55 @@ impl EventType {
 impl PartialEq<&Message> for &SuiEvent {
     fn eq(&self, msg: &&Message) -> bool {
         match serde_json::from_value::<ContractCall>(self.parsed_json.clone()) {
-            Ok(contract_call) => {
-                contract_call.source_id == msg.source_address
-                    && msg.destination_chain == contract_call.destination_chain
-                    && contract_call.destination_address == msg.destination_address
-                    && contract_call.payload_hash == msg.payload_hash
+            Ok(ContractCall {
+                source_id,
+                destination_chain,
+                destination_address,
+                payload_hash,
+            }) => {
+                msg.source_address == source_id
+                    && msg.destination_chain == destination_chain
+                    && msg.destination_address == destination_address
+                    && msg.payload_hash == payload_hash
             }
             _ => false,
         }
     }
 }
 
-impl PartialEq<&WorkerSetConfirmation> for &SuiEvent {
-    fn eq(&self, worker_set: &&WorkerSetConfirmation) -> bool {
-        match serde_json::from_value::<OperatorshipTransferred>(self.parsed_json.clone()) {
-            Ok(event) => {
-                let (operators, weights): (Vec<_>, Vec<_>) = worker_set
-                    .operators
-                    .weights_by_addresses
-                    .iter()
-                    .map(|(operator, weight)| {
-                        (operator.to_owned().to_vec(), weight.to_owned().u128())
-                    })
-                    .unzip();
+impl PartialEq<&VerifierSetConfirmation> for &SuiEvent {
+    fn eq(&self, verifier_set: &&VerifierSetConfirmation) -> bool {
+        let expected = &verifier_set.verifier_set;
 
-                event.payload
-                    == to_bytes(&(operators, weights, worker_set.operators.threshold.u128()))
-                        .expect("failed to serialize new operators data")
+        let mut expected_signers = expected
+            .signers
+            .values()
+            .map(|signer| WeightedSigner {
+                pub_key: HexBinary::from(signer.pub_key.clone()).to_vec(),
+                weight: signer.weight.u128(),
+            })
+            .collect::<Vec<_>>();
+        expected_signers.sort();
+
+        let expected_created_at = [0u8; 24]
+            .into_iter()
+            .chain(expected.created_at.to_be_bytes())
+            .collect::<Vec<_>>();
+
+        match serde_json::from_value::<SignersRotated>(self.parsed_json.clone()) {
+            Ok(SignersRotated {
+                signers:
+                    WeightedSigners {
+                        mut signers,
+                        threshold,
+                        nonce,
+                    },
+            }) => {
+                signers.sort();
+
+                signers == expected_signers
+                    && threshold == expected.threshold.u128()
+                    && nonce.as_slice() == expected_created_at.as_slice()
             }
             _ => false,
         }
@@ -111,17 +182,16 @@ pub fn verify_message(
     }
 }
 
-pub fn verify_worker_set(
+pub fn verify_verifier_set(
     gateway_address: &SuiAddress,
     transaction_block: &SuiTransactionBlockResponse,
-    worker_set: &WorkerSetConfirmation,
+    confirmation: &VerifierSetConfirmation,
 ) -> Vote {
-    match find_event(transaction_block, worker_set.event_index as u64) {
+    match find_event(transaction_block, confirmation.event_index as u64) {
         Some(event)
-            if transaction_block.digest == worker_set.tx_id
-                && event.type_
-                    == EventType::OperatorshipTransferred.struct_tag(gateway_address)
-                && event == worker_set =>
+            if transaction_block.digest == confirmation.tx_id
+                && event.type_ == EventType::SignersRotated.struct_tag(gateway_address)
+                && event == confirmation =>
         {
             Vote::SucceededOnChain
         }
@@ -132,23 +202,27 @@ pub fn verify_worker_set(
 #[cfg(test)]
 mod tests {
     use axelar_wasm_std::voting::Vote;
-    use connection_router_api::ChainName;
-    use cosmwasm_std::HexBinary;
-    use ethers::abi::AbiEncode;
+    use cosmrs::crypto::PublicKey;
+    use cosmwasm_std::{Addr, HexBinary, Uint128};
+    use ecdsa::SigningKey;
+    use ethers_core::abi::AbiEncode;
     use move_core_types::language_storage::StructTag;
+    use multisig::key::KeyType;
+    use multisig::msg::Signer;
+    use multisig::verifier_set::VerifierSet;
+    use rand::rngs::OsRng;
     use random_string::generate;
+    use router_api::ChainName;
+    use serde_json::json;
     use sui_json_rpc_types::{SuiEvent, SuiTransactionBlockEvents, SuiTransactionBlockResponse};
-    use sui_types::{
-        base_types::{SuiAddress, TransactionDigest},
-        event::EventID,
-    };
+    use sui_types::base_types::{SuiAddress, TransactionDigest};
+    use sui_types::event::EventID;
 
-    use crate::handlers::{
-        sui_verify_msg::Message,
-        sui_verify_worker_set::{Operators, WorkerSetConfirmation},
-    };
-    use crate::sui::verifier::{verify_message, verify_worker_set};
+    use crate::handlers::sui_verify_msg::Message;
+    use crate::handlers::sui_verify_verifier_set::VerifierSetConfirmation;
+    use crate::sui::verifier::{verify_message, verify_verifier_set};
     use crate::types::{EVMAddress, Hash};
+    use crate::PREFIX;
 
     #[test]
     fn should_not_verify_msg_if_tx_id_does_not_match() {
@@ -226,12 +300,114 @@ mod tests {
     }
 
     #[test]
-    fn should_verify_worker_set() {
-        let (gateway_address, tx_receipt, worker_set) = get_matching_worker_set_and_tx_block();
+    fn should_verify_verifier_set_if_correct() {
+        let (gateway_address, tx_block, verifier_set) = get_matching_verifier_set_and_tx_block();
 
         assert_eq!(
-            verify_worker_set(&gateway_address, &tx_receipt, &worker_set),
+            verify_verifier_set(&gateway_address, &tx_block, &verifier_set),
             Vote::SucceededOnChain
+        );
+    }
+
+    #[test]
+    fn should_not_verify_verifier_set_if_gateway_address_mismatch() {
+        let (_, tx_block, verifier_set) = get_matching_verifier_set_and_tx_block();
+
+        assert_eq!(
+            verify_verifier_set(
+                &SuiAddress::random_for_testing_only(),
+                &tx_block,
+                &verifier_set
+            ),
+            Vote::NotFound
+        );
+    }
+
+    #[test]
+    fn should_not_verify_verifier_set_if_tx_digest_mismatch() {
+        let (gateway_address, mut tx_block, verifier_set) =
+            get_matching_verifier_set_and_tx_block();
+        tx_block.digest = TransactionDigest::random();
+
+        assert_eq!(
+            verify_verifier_set(&gateway_address, &tx_block, &verifier_set),
+            Vote::NotFound
+        );
+    }
+
+    #[test]
+    fn should_not_verify_verifier_set_if_event_seq_mismatch() {
+        let (gateway_address, tx_block, mut verifier_set) =
+            get_matching_verifier_set_and_tx_block();
+        verifier_set.event_index = rand::random();
+
+        assert_eq!(
+            verify_verifier_set(&gateway_address, &tx_block, &verifier_set),
+            Vote::NotFound
+        );
+    }
+
+    #[test]
+    fn should_not_verify_verifier_set_if_struct_tag_mismatch() {
+        let (gateway_address, mut tx_block, verifier_set) =
+            get_matching_verifier_set_and_tx_block();
+        tx_block
+            .events
+            .as_mut()
+            .unwrap()
+            .data
+            .first_mut()
+            .unwrap()
+            .type_ = StructTag {
+            address: SuiAddress::random_for_testing_only().into(),
+            module: "module".parse().unwrap(),
+            name: "Name".parse().unwrap(),
+            type_params: vec![],
+        };
+
+        assert_eq!(
+            verify_verifier_set(&gateway_address, &tx_block, &verifier_set),
+            Vote::NotFound
+        );
+    }
+
+    #[test]
+    fn should_not_verify_verifier_set_if_threshold_mismatch() {
+        let (gateway_address, tx_block, mut verifier_set) =
+            get_matching_verifier_set_and_tx_block();
+        verifier_set.verifier_set.threshold = Uint128::new(2);
+
+        assert_eq!(
+            verify_verifier_set(&gateway_address, &tx_block, &verifier_set),
+            Vote::NotFound
+        );
+    }
+
+    #[test]
+    fn should_not_verify_verifier_set_if_nonce_mismatch() {
+        let (gateway_address, tx_block, mut verifier_set) =
+            get_matching_verifier_set_and_tx_block();
+        verifier_set.verifier_set.created_at = rand::random();
+
+        assert_eq!(
+            verify_verifier_set(&gateway_address, &tx_block, &verifier_set),
+            Vote::NotFound
+        );
+    }
+
+    #[test]
+    fn should_not_verify_verifier_set_if_signers_mismatch() {
+        let (gateway_address, tx_block, mut verifier_set) =
+            get_matching_verifier_set_and_tx_block();
+        let signer = random_signer();
+        verifier_set
+            .verifier_set
+            .signers
+            .insert(signer.address.to_string(), signer);
+
+        assert_eq!(
+            verify_verifier_set(&gateway_address, &tx_block, &verifier_set),
+            Vote::NotFound
         );
     }
 
@@ -285,118 +461,89 @@ mod tests {
         (gateway_address, tx_block, msg)
     }
 
-    fn get_matching_worker_set_and_tx_block() -> (
+    fn random_signer() -> Signer {
+        let priv_key = SigningKey::random(&mut OsRng);
+        let pub_key: PublicKey = priv_key.verifying_key().into();
+        let address = Addr::unchecked(pub_key.account_id(PREFIX).unwrap());
+        let pub_key = (KeyType::Ecdsa, HexBinary::from(pub_key.to_bytes()))
+            .try_into()
+            .unwrap();
+
+        Signer {
+            address,
+            weight: Uint128::one(),
+            pub_key,
+        }
+    }
+
+    fn get_matching_verifier_set_and_tx_block() -> (
         SuiAddress,
         SuiTransactionBlockResponse,
-        WorkerSetConfirmation,
+        VerifierSetConfirmation,
     ) {
         let gateway_address = SuiAddress::random_for_testing_only();
-
-        let worker_set_confirmation = WorkerSetConfirmation {
+        let signers = vec![random_signer(), random_signer(), random_signer()];
+        let created_at = rand::random();
+        let threshold = Uint128::one();
+        let verifier_set_confirmation = VerifierSetConfirmation {
             tx_id: TransactionDigest::random(),
-            event_index: rand::random::<u32>(),
-            operators: Operators {
-                weights_by_addresses: vec![
-                    (
-                        HexBinary::from_hex(
-                            "021c4f23e560c7fe709dfc9d21564c50ae7d47849564b9c3321c38a8ad1b94d30d",
-                        )
-                        .unwrap(),
-                        1u128.into(),
-                    ),
-                    (
-                        HexBinary::from_hex(
-                            "023054b468b4d9e85144225705aa5dd06e46226a12aae6e854b16046df272145f3",
-                        )
-                        .unwrap(),
-                        1u128.into(),
-                    ),
-                    (
-                        HexBinary::from_hex(
-                            "026fa53253c4e5ca8ba71690470c887686f865fadb49430c2e95dfcc3a864e0c8c",
-                        )
-                        .unwrap(),
-                        1u128.into(),
-                    ),
-                    (
-                        HexBinary::from_hex(
-                            "027561c44dd85e1f08a99f4da41af912fc6a4986a431b3209cf1c8ecdb77609aae",
-                        )
-                        .unwrap(),
-                        1u128.into(),
-                    ),
-                    (
-                        HexBinary::from_hex(
-                            "02d3eef76c31694945e855423b1d7244d80dbbd04c2dbe707f3f4ec9bdcfe88950",
-                        )
-                        .unwrap(),
-                        1u128.into(),
-                    ),
-                    (
-                        HexBinary::from_hex(
-                            "02fdf3916dd87dc1357cd27c9d3ec302bb1a4e331decde00f7479db12c3bc9c96e",
-                        )
-                        .unwrap(),
-                        1u128.into(),
-                    ),
-                    (
-                        HexBinary::from_hex(
-                            "030d47294351c4800e804281e7e24d7fad7b3a53c666958fa5bdcf071a927f78df",
-                        )
-                        .unwrap(),
-                        1u128.into(),
-                    ),
-                    (
-                        HexBinary::from_hex(
-                            "03b36f52c88d68db7fb1a39d1c6a298dbf6936c8c73f8c7d3986145a13b7993744",
-                        )
-                        .unwrap(),
-                        1u128.into(),
-                    ),
-                    (
-                        HexBinary::from_hex(
-                            "03faa1ac20735bdc5647390f9bb9a763d139c284720bb05b46e8db54ca77059d7d",
-                        )
-                        .unwrap(),
-                        1u128.into(),
-                    ),
-                ],
-                threshold: 5u128.into(),
+            event_index: rand::random(),
+            verifier_set: VerifierSet {
+                signers: signers
+                    .iter()
+                    .map(|signer| (signer.address.to_string(), signer.clone()))
+                    .collect(),
+                threshold,
+                created_at,
             },
         };
 
-        let json_str = format!(
-            r#"{{"epoch": "{}", "payload":[9,33,2,28,79,35,229,96,199,254,112,157,252,157,33,86,76,80,174,125,71,132,149,100,185,195,50,28,56,168,173,27,148,211,13,33,2,48,84,180,104,180,217,232,81,68,34,87,5,170,93,208,110,70,34,106,18,170,230,232,84,177,96,70,223,39,33,69,243,33,2,111,165,50,83,196,229,202,139,167,22,144,71,12,136,118,134,248,101,250,219,73,67,12,46,149,223,204,58,134,78,12,140,33,2,117,97,196,77,216,94,31,8,169,159,77,164,26,249,18,252,106,73,134,164,49,179,32,156,241,200,236,219,119,96,154,174,33,2,211,238,247,108,49,105,73,69,232,85,66,59,29,114,68,216,13,187,208,76,45,190,112,127,63,78,201,189,207,232,137,80,33,2,253,243,145,109,216,125,193,53,124,210,124,157,62,195,2,187,26,78,51,29,236,222,0,247,71,157,177,44,59,201,201,110,33,3,13,71,41,67,81,196,128,14,128,66,129,231,226,77,127,173,123,58,83,198,102,149,143,165,189,207,7,26,146,127,120,223,33,3,179,111,82,200,141,104,219,127,177,163,157,28,106,41,141,191,105,54,200,199,63,140,125,57,134,20,90,19,183,153,55,68,33,3,250,161,172,32,115,91,220,86,71,57,15,155,185,167,99,209,57,194,132,114,11,176,91,70,232,219,84,202,119,5,157,125,9,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}}"#,
-            rand::random::<u64>(),
-        );
-        let parsed: serde_json::Value = serde_json::from_str(json_str.as_str()).unwrap();
+        let parsed_json = json!({
+            "epoch": "1",
+            "signers": {
+                "nonce": {
+                    "bytes": format!("0x{:0>64}", HexBinary::from(created_at.to_be_bytes()).to_hex())
+                },
+
+                "signers": signers.into_iter().map(|signer| {
+                    json!({
+                        "pub_key": HexBinary::from(signer.pub_key).to_vec(),
+                        "weight": signer.weight.u128().to_string()
+                    })
+                }).collect::<Vec<_>>(),
+                "threshold": threshold.to_string(),
+            },
+            "signers_hash": {
+                "bytes": format!("0x{:0>64}", HexBinary::from(verifier_set_confirmation.verifier_set.hash()).to_hex())
+            }
+        });
 
         let event = SuiEvent {
             id: EventID {
-                tx_digest: worker_set_confirmation.tx_id,
-                event_seq: worker_set_confirmation.event_index as u64,
+                tx_digest: verifier_set_confirmation.tx_id,
+                event_seq: verifier_set_confirmation.event_index as u64,
             },
             package_id: gateway_address.into(),
             transaction_module: "gateway".parse().unwrap(),
             sender: SuiAddress::random_for_testing_only(),
             type_: StructTag {
                 address: gateway_address.into(),
-                module: "validators".parse().unwrap(),
-                name: "OperatorshipTransferred".parse().unwrap(),
+                module: "auth".parse().unwrap(),
+                name: "SignersRotated".parse().unwrap(),
                 type_params: vec![],
             },
-            parsed_json: parsed,
+            parsed_json,
             bcs: vec![],
             timestamp_ms: None,
         };
 
         let tx_block = SuiTransactionBlockResponse {
-            digest: worker_set_confirmation.tx_id,
+            digest: verifier_set_confirmation.tx_id,
             events: Some(SuiTransactionBlockEvents { data: vec![event] }),
             ..Default::default()
         };
 
-        (gateway_address, tx_block, worker_set_confirmation)
+        (gateway_address, tx_block, verifier_set_confirmation)
     }
 
     fn rand_chain_name() -> ChainName {

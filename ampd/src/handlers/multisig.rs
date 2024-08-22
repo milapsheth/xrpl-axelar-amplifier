@@ -3,29 +3,27 @@ use std::convert::TryInto;
 use std::str::FromStr;
 
 use async_trait::async_trait;
-use connection_router_api::ChainName;
+use router_api::ChainName;
 use cosmrs::cosmwasm::MsgExecuteContract;
+use cosmrs::tx::Msg;
+use cosmrs::Any;
 use cosmwasm_std::{HexBinary, Uint64};
 use ecdsa::VerifyingKey;
-use error_stack::ResultExt;
+use error_stack::{Report, ResultExt};
+use events::Error::EventTypeMismatch;
+use events_derive::{self, try_from};
 use hex::encode;
+use multisig::msg::ExecuteMsg;
 use serde::de::Error as DeserializeError;
 use serde::{Deserialize, Deserializer};
 use tokio::sync::watch::Receiver;
 use tracing::info;
 
-use events::Error::EventTypeMismatch;
-use events_derive;
-use events_derive::try_from;
-use multisig::msg::ExecuteMsg;
-
 use crate::event_processor::EventHandler;
 use crate::handlers::errors::Error::{self, DeserializeEvent};
-use crate::queue::queued_broadcaster::BroadcasterClient;
-use crate::tofnd::grpc::SharableEcdsaClient;
-use crate::tofnd::MessageDigest;
-use crate::types::PublicKey;
-use crate::types::TMAddress;
+use crate::tofnd::grpc::Multisig;
+use crate::tofnd::{self, MessageDigest};
+use crate::types::{PublicKey, TMAddress};
 
 #[derive(Debug, Deserialize)]
 #[try_from("wasm-signing_started")]
@@ -69,72 +67,59 @@ where
         .collect()
 }
 
-pub struct Handler<B>
-where
-    B: BroadcasterClient,
-{
-    worker: TMAddress,
+pub struct Handler<S> {
+    verifier: TMAddress,
     multisig: TMAddress,
-    broadcaster: B,
-    signer: SharableEcdsaClient,
+    signer: S,
     latest_block_height: Receiver<u64>,
 }
 
-impl<B> Handler<B>
+impl<S> Handler<S>
 where
-    B: BroadcasterClient,
+    S: Multisig,
 {
     pub fn new(
-        worker: TMAddress,
+        verifier: TMAddress,
         multisig: TMAddress,
-        broadcaster: B,
-        signer: SharableEcdsaClient,
+        signer: S,
         latest_block_height: Receiver<u64>,
     ) -> Self {
         Self {
-            worker,
+            verifier,
             multisig,
-            broadcaster,
             signer,
             latest_block_height,
         }
     }
 
-    async fn broadcast_signature(
+    fn submit_signature_msg(
         &self,
         session_id: impl Into<Uint64>,
         signature: impl Into<HexBinary>,
-    ) -> error_stack::Result<(), Error> {
-        let msg = serde_json::to_vec(&ExecuteMsg::SubmitSignature {
-            session_id: session_id.into(),
-            signature: signature.into(),
-        })
-        .expect("submit signature msg should serialize");
-
-        let tx = MsgExecuteContract {
-            sender: self.worker.as_ref().clone(),
+    ) -> MsgExecuteContract {
+        MsgExecuteContract {
+            sender: self.verifier.as_ref().clone(),
             contract: self.multisig.as_ref().clone(),
-            msg,
+            msg: serde_json::to_vec(&ExecuteMsg::SubmitSignature {
+                session_id: session_id.into(),
+                signature: signature.into(),
+            })
+            .expect("submit signature msg should serialize"),
             funds: vec![],
-        };
-
-        self.broadcaster
-            .broadcast(tx)
-            .await
-            .change_context(Error::Broadcaster)
+        }
     }
 }
 
 #[async_trait]
-impl<B> EventHandler for Handler<B>
+impl<S> EventHandler for Handler<S>
 where
-    B: BroadcasterClient + Send + Sync,
+    S: Multisig + Sync,
 {
     type Err = Error;
 
-    async fn handle(&self, event: &events::Event) -> error_stack::Result<(), Error> {
+    async fn handle(&self, event: &events::Event) -> error_stack::Result<Vec<Any>, Error> {
         if !event.is_from_contract(self.multisig.as_ref()) {
-            return Ok(());
+            return Ok(vec![]);
         }
 
         let SigningStartedEvent {
@@ -145,7 +130,7 @@ where
             chain,
         } = match event.try_into() as error_stack::Result<_, _> {
             Err(report) if matches!(report.current_context(), EventTypeMismatch(_)) => {
-                return Ok(());
+                return Ok(vec![]);
             }
             result => result.change_context(DeserializeEvent)?,
         };
@@ -155,7 +140,7 @@ where
                 session_id = session_id.to_string(),
                 "skipping XRP signing session"
             );
-            return Ok(());
+            return Ok(vec![]);
         }
 
         info!(
@@ -170,26 +155,39 @@ where
                 session_id = session_id.to_string(),
                 "skipping expired signing session"
             );
-            return Ok(());
+            return Ok(vec![]);
         }
 
-        match pub_keys.get(&self.worker) {
+        match pub_keys.get(&self.verifier) {
             Some(pub_key) => {
+                let key_type = match pub_key.type_url() {
+                    PublicKey::ED25519_TYPE_URL => tofnd::Algorithm::Ed25519,
+                    PublicKey::SECP256K1_TYPE_URL => tofnd::Algorithm::Ecdsa,
+                    unspported => return Err(Report::from(Error::KeyType(unspported.to_string()))),
+                };
+
                 let signature = self
                     .signer
-                    .sign(self.multisig.to_string().as_str(), msg.clone(), pub_key)
+                    .sign(
+                        self.multisig.to_string().as_str(),
+                        msg.clone(),
+                        pub_key,
+                        key_type,
+                    )
                     .await
                     .change_context(Error::Sign)?;
 
                 info!(signature = encode(&signature), "ready to submit signature");
 
-                self.broadcast_signature(session_id, signature).await?;
-
-                Ok(())
+                Ok(vec![self
+                    .submit_signature_msg(session_id, signature)
+                    .into_any()
+                    .expect("submit signature msg should serialize")])
             }
             None => {
-                info!("worker is not a participant");
-                Ok(())
+                info!("verifier is not a participant");
+
+                Ok(vec![])
             }
         }
     }
@@ -199,33 +197,28 @@ where
 mod test {
     use std::collections::HashMap;
     use std::convert::{TryFrom, TryInto};
-    use std::time::Duration;
 
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
-    use connection_router_api::ChainName;
-    use cosmos_sdk_proto::cosmos::base::abci::v1beta1::TxResponse;
-    use cosmrs::{AccountId, Gas};
+    use cosmrs::proto::cosmos::base::abci::v1beta1::TxResponse;
+    use cosmrs::AccountId;
     use cosmwasm_std::{HexBinary, Uint64};
     use ecdsa::SigningKey;
     use error_stack::{Report, Result};
-    use rand::distributions::Alphanumeric;
-    use rand::rngs::OsRng;
-    use rand::Rng;
-    use tendermint::abci;
-    use tokio::sync::watch;
-
     use multisig::events::Event::SigningStarted;
     use multisig::key::PublicKey;
     use multisig::types::MsgToSign;
-
-    use crate::broadcaster::MockBroadcaster;
-    use crate::queue::queued_broadcaster::{QueuedBroadcaster, QueuedBroadcasterClient};
-    use crate::tofnd;
-    use crate::tofnd::grpc::{MockEcdsaClient, SharableEcdsaClient};
-    use crate::types;
+    use rand::distributions::Alphanumeric;
+    use rand::rngs::OsRng;
+    use rand::Rng;
+    use router_api::ChainName;
+    use tendermint::abci;
+    use tokio::sync::watch;
 
     use super::*;
+    use crate::broadcaster::MockBroadcaster;
+    use crate::tofnd::grpc::MockMultisig;
+    use crate::{tofnd, types};
 
     const MULTISIG_ADDRESS: &str = "axelarvaloper1zh9wrak6ke4n6fclj5e8yk397czv430ygs5jz7";
 
@@ -264,7 +257,7 @@ mod test {
 
         let poll_started = SigningStarted {
             session_id: Uint64::one(),
-            worker_set_id: "worker_set_id".to_string(),
+            verifier_set_id: "verifier_set_id".to_string(),
             pub_keys,
             msg: MsgToSign::unchecked(rand_message()),
             chain_name: rand_chain_name(),
@@ -295,7 +288,7 @@ mod test {
 
         let poll_started = SigningStarted {
             session_id: Uint64::one(),
-            worker_set_id: "worker_set_id".to_string(),
+            verifier_set_id: "verifier_set_id".to_string(),
             pub_keys,
             msg: MsgToSign::unchecked(rand_message()),
             chain_name: rand_chain_name(),
@@ -320,22 +313,19 @@ mod test {
     }
 
     fn get_handler(
-        worker: TMAddress,
+        verifier: TMAddress,
         multisig: TMAddress,
-        signer: SharableEcdsaClient,
+        signer: MockMultisig,
         latest_block_height: u64,
-    ) -> Handler<QueuedBroadcasterClient> {
+    ) -> Handler<MockMultisig> {
         let mut broadcaster = MockBroadcaster::new();
         broadcaster
             .expect_broadcast()
             .returning(|_| Ok(TxResponse::default()));
 
-        let (broadcaster, _) =
-            QueuedBroadcaster::new(broadcaster, Gas::default(), 100, Duration::from_secs(5));
-
         let (_, rx) = watch::channel(latest_block_height);
 
-        Handler::new(worker, multisig, broadcaster.client(), signer, rx)
+        Handler::new(verifier, multisig, signer, rx)
     }
 
     #[test]
@@ -395,31 +385,34 @@ mod test {
 
     #[tokio::test]
     async fn should_not_handle_event_with_missing_fields_if_multisig_address_does_not_match() {
-        let client = MockEcdsaClient::new();
+        let client = MockMultisig::default();
 
         let handler = get_handler(
             rand_account(),
             TMAddress::from(MULTISIG_ADDRESS.parse::<AccountId>().unwrap()),
-            SharableEcdsaClient::new(client),
+            client,
             100u64,
         );
 
-        assert!(handler
-            .handle(&signing_started_event_with_missing_fields(
-                &rand_account().to_string()
-            ))
-            .await
-            .is_ok());
+        assert_eq!(
+            handler
+                .handle(&signing_started_event_with_missing_fields(
+                    &rand_account().to_string()
+                ))
+                .await
+                .unwrap(),
+            vec![]
+        );
     }
 
     #[tokio::test]
     async fn should_error_on_event_with_missing_fields_if_multisig_address_does_match() {
-        let client = MockEcdsaClient::new();
+        let client = MockMultisig::default();
 
         let handler = get_handler(
             rand_account(),
             TMAddress::from(MULTISIG_ADDRESS.parse::<AccountId>().unwrap()),
-            SharableEcdsaClient::new(client),
+            client,
             100u64,
         );
 
@@ -431,49 +424,50 @@ mod test {
 
     #[tokio::test]
     async fn should_not_handle_event_if_multisig_address_does_not_match() {
-        let client = MockEcdsaClient::new();
+        let client = MockMultisig::default();
 
-        let handler = get_handler(
-            rand_account(),
-            rand_account(),
-            SharableEcdsaClient::new(client),
-            100u64,
+        let handler = get_handler(rand_account(), rand_account(), client, 100u64);
+
+        assert_eq!(
+            handler.handle(&signing_started_event()).await.unwrap(),
+            vec![]
         );
-
-        assert!(handler.handle(&signing_started_event()).await.is_ok());
     }
 
     #[tokio::test]
-    async fn should_not_handle_event_if_worker_is_not_a_participant() {
-        let mut client = MockEcdsaClient::new();
+    async fn should_not_handle_event_if_verifier_is_not_a_participant() {
+        let mut client = MockMultisig::default();
         client
             .expect_sign()
-            .returning(move |_, _, _| Err(Report::from(tofnd::error::Error::SignFailed)));
+            .returning(move |_, _, _, _| Err(Report::from(tofnd::error::Error::SignFailed)));
 
         let handler = get_handler(
             rand_account(),
             TMAddress::from(MULTISIG_ADDRESS.parse::<AccountId>().unwrap()),
-            SharableEcdsaClient::new(client),
+            client,
             100u64,
         );
 
-        assert!(handler.handle(&signing_started_event()).await.is_ok());
+        assert_eq!(
+            handler.handle(&signing_started_event()).await.unwrap(),
+            vec![]
+        );
     }
 
     #[tokio::test]
     async fn should_not_handle_event_if_sign_failed() {
-        let mut client = MockEcdsaClient::new();
+        let mut client = MockMultisig::default();
         client
             .expect_sign()
-            .returning(move |_, _, _| Err(Report::from(tofnd::error::Error::SignFailed)));
+            .returning(move |_, _, _, _| Err(Report::from(tofnd::error::Error::SignFailed)));
 
         let event = signing_started_event();
         let signing_started: SigningStartedEvent = ((&event).try_into() as Result<_, _>).unwrap();
-        let worker = signing_started.pub_keys.keys().next().unwrap().clone();
+        let verifier = signing_started.pub_keys.keys().next().unwrap().clone();
         let handler = get_handler(
-            worker,
+            verifier,
             TMAddress::from(MULTISIG_ADDRESS.parse::<AccountId>().unwrap()),
-            SharableEcdsaClient::new(client),
+            client,
             99u64,
         );
 
@@ -485,21 +479,21 @@ mod test {
 
     #[tokio::test]
     async fn should_not_handle_event_if_session_expired() {
-        let mut client = MockEcdsaClient::new();
+        let mut client = MockMultisig::default();
         client
             .expect_sign()
-            .returning(move |_, _, _| Err(Report::from(tofnd::error::Error::SignFailed)));
+            .returning(move |_, _, _, _| Err(Report::from(tofnd::error::Error::SignFailed)));
 
         let event = signing_started_event();
         let signing_started: SigningStartedEvent = ((&event).try_into() as Result<_, _>).unwrap();
-        let worker = signing_started.pub_keys.keys().next().unwrap().clone();
+        let verifier = signing_started.pub_keys.keys().next().unwrap().clone();
         let handler = get_handler(
-            worker,
+            verifier,
             TMAddress::from(MULTISIG_ADDRESS.parse::<AccountId>().unwrap()),
-            SharableEcdsaClient::new(client),
+            client,
             101u64,
         );
 
-        assert!(handler.handle(&signing_started_event()).await.is_ok());
+        assert_eq!(handler.handle(&event).await.unwrap(), vec![]);
     }
 }

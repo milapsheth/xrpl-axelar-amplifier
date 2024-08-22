@@ -1,12 +1,14 @@
 use core::fmt;
-use std::{fmt::Display, str::FromStr};
+use std::fmt::Display;
+use std::str::FromStr;
 
 use error_stack::{Report, ResultExt};
 use lazy_static::lazy_static;
 use regex::Regex;
 
 use super::Error;
-use crate::{hash::Hash, nonempty};
+use crate::hash::Hash;
+use crate::nonempty;
 
 pub struct Base58TxDigestAndEventIndex {
     pub tx_digest: Hash,
@@ -19,6 +21,13 @@ impl Base58TxDigestAndEventIndex {
             .into_string()
             .try_into()
             .expect("failed to convert tx hash to non-empty string")
+    }
+
+    pub fn new(tx_id: impl Into<[u8; 32]>, event_index: impl Into<u32>) -> Self {
+        Self {
+            tx_digest: tx_id.into(),
+            event_index: event_index.into(),
+        }
     }
 }
 

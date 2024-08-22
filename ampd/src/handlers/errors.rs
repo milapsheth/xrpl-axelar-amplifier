@@ -2,8 +2,6 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("failed to broadcast transaction")]
-    Broadcaster,
     #[error("failed to get the latest finalized block")]
     Finalizer,
     #[error("failed to deserialize the event")]
@@ -13,7 +11,9 @@ pub enum Error {
     #[error("failed to get transaction receipts")]
     TxReceipts,
     #[error("failed to parse public key")]
-    PublicKey,
+    PublicKey, // TODO: check if redundant
     #[error("failed to prepare message for signing")]
-    MessageToSign,
+    MessageToSign, // TODO: check if redundant
+    #[error("unsupported key type {0}")]
+    KeyType(String),
 }

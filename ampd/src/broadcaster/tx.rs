@@ -1,16 +1,14 @@
 use core::fmt::Debug;
 use std::future::Future;
 
+use cosmrs::proto::cosmos::tx::v1beta1::TxRaw;
 use cosmrs::tendermint::chain::Id;
-use cosmrs::{
-    proto::cosmos::tx::v1beta1::TxRaw,
-    tx::{BodyBuilder, Fee, SignDoc, SignerInfo},
-    Any, Coin,
-};
-use derive_builder::Builder;
+use cosmrs::tx::{BodyBuilder, Fee, SignDoc, SignerInfo};
+use cosmrs::{Any, Coin};
 use error_stack::{Context, Result, ResultExt};
 use report::ResultCompatExt;
 use thiserror::Error;
+use typed_builder::TypedBuilder;
 
 use crate::types::PublicKey;
 
@@ -25,7 +23,7 @@ pub enum Error {
     Marshaling,
 }
 
-#[derive(Builder)]
+#[derive(TypedBuilder)]
 pub struct Tx<M>
 where
     M: IntoIterator<Item = Any>,
@@ -33,22 +31,18 @@ where
     msgs: M,
     pub_key: PublicKey,
     acc_sequence: u64,
+    #[builder(default = zero_fee())]
     fee: Fee,
 }
 
-impl<M> TxBuilder<M>
-where
-    M: IntoIterator<Item = Any> + Clone,
-{
-    pub fn zero_fee(&mut self) -> &mut Self {
-        self.fee(Fee::from_amount_and_gas(
-            Coin {
-                denom: "".parse().unwrap(),
-                amount: 0,
-            },
-            0u64,
-        ))
-    }
+fn zero_fee() -> Fee {
+    Fee::from_amount_and_gas(
+        Coin {
+            denom: "".parse().unwrap(),
+            amount: 0,
+        },
+        0u64,
+    )
 }
 
 impl<M> Tx<M>
@@ -102,24 +96,21 @@ where
 
 #[cfg(test)]
 mod tests {
-    use cosmos_sdk_proto::Any;
-    use cosmrs::{
-        bank::MsgSend,
-        bip32::secp256k1::elliptic_curve::rand_core::OsRng,
-        crypto::secp256k1::SigningKey,
-        proto::cosmos::tx::v1beta1::TxRaw,
-        tendermint::chain::Id,
-        tx::{BodyBuilder, Fee, Msg, SignDoc, SignerInfo},
-        AccountId, Coin,
-    };
+    use cosmrs::bank::MsgSend;
+    use cosmrs::bip32::secp256k1::elliptic_curve::rand_core::OsRng;
+    use cosmrs::crypto::secp256k1::SigningKey;
+    use cosmrs::proto::cosmos::tx::v1beta1::TxRaw;
+    use cosmrs::proto::Any;
+    use cosmrs::tendermint::chain::Id;
+    use cosmrs::tx::{BodyBuilder, Fee, Msg, SignDoc, SignerInfo};
+    use cosmrs::{AccountId, Coin};
     use error_stack::Result;
     use k256::ecdsa;
     use k256::sha2::{Digest, Sha256};
     use tokio::test;
 
+    use super::{Error, Tx, DUMMY_CHAIN_ID};
     use crate::types::PublicKey;
-
-    use super::{Error, TxBuilder, DUMMY_CHAIN_ID};
 
     #[test]
     async fn sign_with_should_produce_the_correct_tx() {
@@ -131,13 +122,11 @@ mod tests {
         let chain_id: Id = DUMMY_CHAIN_ID.parse().unwrap();
         let msgs = vec![dummy_msg(), dummy_msg(), dummy_msg()];
 
-        let actual_tx = TxBuilder::default()
+        let actual_tx = Tx::builder()
             .msgs(msgs.clone())
-            .zero_fee()
             .pub_key(pub_key)
             .acc_sequence(acc_sequence)
             .build()
-            .unwrap()
             .sign_with(&chain_id, acc_number, |sign_doc| async move {
                 let mut hasher = Sha256::new();
                 hasher.update(sign_doc);
@@ -175,13 +164,11 @@ mod tests {
         let acc_sequence = 1000;
         let msgs = vec![dummy_msg(), dummy_msg(), dummy_msg()];
 
-        let actual_tx = TxBuilder::default()
+        let actual_tx = Tx::builder()
             .msgs(msgs.clone())
-            .zero_fee()
             .pub_key(pub_key)
             .acc_sequence(acc_sequence)
             .build()
-            .unwrap()
             .with_dummy_sig()
             .await
             .unwrap();

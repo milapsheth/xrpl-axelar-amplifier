@@ -1,9 +1,9 @@
 use crate::{
-    axelar_workers::WorkerSet,
+    axelar_workers::VerifierSet,
     types::{TransactionInfo, TxHash, XRPLToken},
 };
 use axelar_wasm_std::MajorityThreshold;
-use connection_router_api::CrossChainId;
+use router_api::CrossChainId;
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::Addr;
 use cw_storage_plus::{Item, Map};
@@ -14,14 +14,14 @@ pub struct Config {
     pub governance: Addr,
     pub relayer: Addr,
     pub axelar_multisig: Addr,
-    pub monitoring: Addr,
+    pub coordinator: Addr,
     pub gateway: Addr,
     pub signing_threshold: MajorityThreshold,
     pub xrpl_multisig: String,
     pub voting_verifier: Addr,
     pub service_registry: Addr,
     pub service_name: String,
-    pub worker_set_diff_threshold: u32,
+    pub verifier_set_diff_threshold: u32,
     pub xrpl_fee: u64,
     pub ticket_count_threshold: u32,
     pub key_type: multisig::key::KeyType,
@@ -52,5 +52,5 @@ pub const LATEST_SEQUENTIAL_TX_HASH: Item<TxHash> = Item::new("latest_sequential
 
 pub const TOKENS: Map<&String, (XRPLToken, u8)> = Map::new("tokens");
 
-pub const CURRENT_WORKER_SET: Item<WorkerSet> = Item::new("current_worker_set");
-pub const NEXT_WORKER_SET: Map<&TxHash, WorkerSet> = Map::new("next_worker_set");
+pub const CURRENT_VERIFIER_SET: Item<VerifierSet> = Item::new("current_verifier_set");
+pub const NEXT_VERIFIER_SET: Map<&TxHash, VerifierSet> = Map::new("next_verifier_set");

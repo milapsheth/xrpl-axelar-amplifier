@@ -1,13 +1,12 @@
-use axelar_wasm_std::{
-    operators::Operators,
-    voting::{PollStatus, Vote},
-    MajorityThreshold, VerificationStatus,
-};
-use connection_router_api::{CrossChainId, Message};
+use axelar_wasm_std::voting::{PollId, PollStatus, Vote};
+use axelar_wasm_std::{MajorityThreshold, VerificationStatus};
 use cosmwasm_std::Deps;
+use multisig::verifier_set::VerifierSet;
+use router_api::Message;
 
-use crate::state::{self, Poll, PollContent, POLLS, POLL_MESSAGES, POLL_WORKER_SETS};
-use crate::{error::ContractError, state::CONFIG};
+use crate::error::ContractError;
+use crate::msg::{MessageStatus, PollData, PollResponse};
+use crate::state::{self, poll_messages, poll_verifier_sets, Poll, PollContent, CONFIG, POLLS};
 
 pub fn voting_threshold(deps: Deps) -> Result<MajorityThreshold, ContractError> {
     Ok(CONFIG.load(deps.storage)?.voting_threshold)
@@ -16,34 +15,91 @@ pub fn voting_threshold(deps: Deps) -> Result<MajorityThreshold, ContractError> 
 pub fn messages_status(
     deps: Deps,
     messages: &[Message],
-) -> Result<Vec<(CrossChainId, VerificationStatus)>, ContractError> {
+    cur_block_height: u64,
+) -> Result<Vec<MessageStatus>, ContractError> {
     messages
         .iter()
         .map(|message| {
-            message_status(deps, message).map(|status| (message.cc_id.to_owned(), status))
+            message_status(deps, message, cur_block_height)
+                .map(|status| MessageStatus::new(message.to_owned(), status))
         })
-        .collect::<Result<Vec<_>, _>>()
+        .collect()
 }
 
-pub fn message_status(deps: Deps, message: &Message) -> Result<VerificationStatus, ContractError> {
-    let loaded_poll_content = POLL_MESSAGES.may_load(deps.storage, &message.hash())?;
-
-    Ok(verification_status(deps, loaded_poll_content, message))
-}
-
-pub fn worker_set_status(
+pub fn message_status(
     deps: Deps,
-    operators: &Operators,
+    message: &Message,
+    cur_block_height: u64,
 ) -> Result<VerificationStatus, ContractError> {
-    let loaded_poll_content = POLL_WORKER_SETS.may_load(deps.storage, &operators.hash())?;
+    let loaded_poll_content = poll_messages().may_load(deps.storage, &message.hash())?;
 
-    Ok(verification_status(deps, loaded_poll_content, operators))
+    Ok(verification_status(
+        deps,
+        loaded_poll_content,
+        message,
+        cur_block_height,
+    ))
+}
+
+pub fn poll_response(
+    deps: Deps,
+    current_block_height: u64,
+    poll_id: PollId,
+) -> Result<PollResponse, ContractError> {
+    let poll = POLLS.load(deps.storage, poll_id)?;
+    let (data, status) = match &poll {
+        Poll::Messages(poll) => {
+            let msgs = poll_messages().idx.load_messages(deps.storage, poll_id)?;
+            assert_eq!(
+                poll.tallies.len(),
+                msgs.len(),
+                "data inconsistency for number of messages in poll {}",
+                poll.poll_id
+            );
+
+            (PollData::Messages(msgs), poll.status(current_block_height))
+        }
+        Poll::ConfirmVerifierSet(poll) => (
+            PollData::VerifierSet(
+                poll_verifier_sets()
+                    .idx
+                    .load_verifier_set(deps.storage, poll_id)?
+                    .expect("verifier set not found in poll"),
+            ),
+            poll.status(current_block_height),
+        ),
+    };
+
+    Ok(PollResponse {
+        poll: poll.weighted_poll(),
+        data,
+        status,
+    })
+}
+
+pub fn verifier_set_status(
+    deps: Deps,
+    verifier_set: &VerifierSet,
+    cur_block_height: u64,
+) -> Result<VerificationStatus, ContractError> {
+    let loaded_poll_content = poll_verifier_sets().may_load(
+        deps.storage,
+        &verifier_set.hash().as_slice().try_into().unwrap(),
+    )?;
+
+    Ok(verification_status(
+        deps,
+        loaded_poll_content,
+        verifier_set,
+        cur_block_height,
+    ))
 }
 
 fn verification_status<T: PartialEq + std::fmt::Debug>(
     deps: Deps,
     stored_poll_content: Option<PollContent<T>>,
     content: &T,
+    cur_block_height: u64,
 ) -> VerificationStatus {
     match stored_poll_content {
         Some(stored) => {
@@ -57,51 +113,56 @@ fn verification_status<T: PartialEq + std::fmt::Debug>(
                 .expect("invalid invariant: content's poll not found");
 
             let consensus = match &poll {
-                Poll::Messages(poll) | Poll::ConfirmWorkerSet(poll) => poll
+                Poll::Messages(poll) | Poll::ConfirmVerifierSet(poll) => poll
                     .consensus(stored.index_in_poll)
                     .expect("invalid invariant: message not found in poll"),
             };
 
             match consensus {
-                Some(Vote::SucceededOnChain) => VerificationStatus::SucceededOnChain,
-                Some(Vote::FailedOnChain) => VerificationStatus::FailedOnChain,
-                Some(Vote::NotFound) => VerificationStatus::NotFound,
-                None if is_finished(&poll) => VerificationStatus::FailedToVerify,
+                Some(Vote::SucceededOnChain) => VerificationStatus::SucceededOnSourceChain,
+                Some(Vote::FailedOnChain) => VerificationStatus::FailedOnSourceChain,
+                Some(Vote::NotFound) => VerificationStatus::NotFoundOnSourceChain,
+                None if voting_completed(&poll, cur_block_height) => {
+                    VerificationStatus::FailedToVerify
+                }
                 None => VerificationStatus::InProgress,
             }
         }
-        None => VerificationStatus::None,
+        None => VerificationStatus::Unknown,
     }
 }
 
-fn is_finished(poll: &state::Poll) -> bool {
+fn voting_completed(poll: &state::Poll, cur_block_height: u64) -> bool {
     match poll {
-        state::Poll::Messages(poll) | state::Poll::ConfirmWorkerSet(poll) => {
-            poll.status == PollStatus::Finished
+        state::Poll::Messages(poll) | state::Poll::ConfirmVerifierSet(poll) => {
+            matches!(
+                poll.status(cur_block_height),
+                PollStatus::Expired | PollStatus::Finished
+            )
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use axelar_wasm_std::{
-        nonempty,
-        voting::{PollId, Tallies, Vote, WeightedPoll},
-        Participant, Snapshot, Threshold,
-    };
-    use cosmwasm_std::{testing::mock_dependencies, Addr, Uint256, Uint64};
-
-    use crate::events::TX_HASH_EVENT_INDEX_SEPARATOR;
-    use crate::state::PollContent;
+    use axelar_wasm_std::msg_id::HexTxHashAndEventIndex;
+    use axelar_wasm_std::voting::{PollId, Tallies, Vote, WeightedPoll};
+    use axelar_wasm_std::{nonempty, Participant, Snapshot, Threshold};
+    use cosmwasm_std::testing::{mock_dependencies, mock_env};
+    use cosmwasm_std::{Addr, Uint128, Uint64};
+    use itertools::Itertools;
+    use router_api::CrossChainId;
 
     use super::*;
+    use crate::state::PollContent;
 
     #[test]
     fn verification_status_in_progress() {
         let mut deps = mock_dependencies();
         let idx = 0;
+        let cur_block_height = 100;
 
-        let poll = poll();
+        let poll = poll(cur_block_height + 10);
         POLLS
             .save(
                 deps.as_mut().storage,
@@ -111,7 +172,7 @@ mod tests {
             .unwrap();
 
         let msg = message(1);
-        POLL_MESSAGES
+        poll_messages()
             .save(
                 deps.as_mut().storage,
                 &msg.hash(),
@@ -120,8 +181,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            vec![(msg.cc_id.clone(), VerificationStatus::InProgress)],
-            messages_status(deps.as_ref(), &[msg]).unwrap()
+            vec![MessageStatus::new(
+                msg.clone(),
+                VerificationStatus::InProgress
+            )],
+            messages_status(deps.as_ref(), &[msg], cur_block_height).unwrap()
         );
     }
 
@@ -129,10 +193,11 @@ mod tests {
     fn verification_status_verified() {
         let mut deps = mock_dependencies();
         let idx = 0;
+        let cur_block_height = 100;
 
-        let mut poll = poll();
+        let mut poll = poll(cur_block_height + 10);
         poll.tallies[idx] = Tallies::default();
-        poll.tallies[idx].tally(&Vote::SucceededOnChain, &Uint256::from(5u64));
+        poll.tallies[idx].tally(&Vote::SucceededOnChain, &Uint128::from(5u64));
 
         POLLS
             .save(
@@ -143,7 +208,7 @@ mod tests {
             .unwrap();
 
         let msg = message(1);
-        POLL_MESSAGES
+        poll_messages()
             .save(
                 deps.as_mut().storage,
                 &msg.hash(),
@@ -152,8 +217,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            vec![(msg.cc_id.clone(), VerificationStatus::SucceededOnChain)],
-            messages_status(deps.as_ref(), &[msg]).unwrap()
+            vec![MessageStatus::new(
+                msg.clone(),
+                VerificationStatus::SucceededOnSourceChain
+            )],
+            messages_status(deps.as_ref(), &[msg], cur_block_height).unwrap()
         );
     }
 
@@ -161,9 +229,11 @@ mod tests {
     fn verification_status_failed_to_verify() {
         let mut deps = mock_dependencies();
         let idx = 0;
+        let cur_block_height = 100;
+        let poll_duration = 10;
+        let expires_at = cur_block_height + poll_duration;
 
-        let mut poll = poll();
-        poll.status = PollStatus::Finished;
+        let poll = poll(expires_at);
 
         POLLS
             .save(
@@ -174,7 +244,7 @@ mod tests {
             .unwrap();
 
         let msg = message(1);
-        POLL_MESSAGES
+        poll_messages()
             .save(
                 deps.as_mut().storage,
                 &msg.hash(),
@@ -183,8 +253,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            vec![(msg.cc_id.clone(), VerificationStatus::FailedToVerify)],
-            messages_status(deps.as_ref(), &[msg]).unwrap()
+            vec![MessageStatus::new(
+                msg.clone(),
+                VerificationStatus::FailedToVerify
+            )],
+            messages_status(deps.as_ref(), &[msg], expires_at).unwrap()
         );
     }
 
@@ -194,18 +267,57 @@ mod tests {
         let msg = message(1);
 
         assert_eq!(
-            vec![(msg.cc_id.clone(), VerificationStatus::None)],
-            messages_status(deps.as_ref(), &[msg]).unwrap()
+            vec![MessageStatus::new(msg.clone(), VerificationStatus::Unknown)],
+            messages_status(deps.as_ref(), &[msg], 0).unwrap()
         );
     }
 
-    fn message(id: u64) -> Message {
+    #[test]
+    #[allow(clippy::cast_possible_truncation)]
+    fn poll_response() {
+        let mut deps = mock_dependencies();
+
+        let poll = poll(1);
+        POLLS
+            .save(
+                deps.as_mut().storage,
+                poll.poll_id,
+                &state::Poll::Messages(poll.clone()),
+            )
+            .unwrap();
+
+        let messages = (0..poll.poll_size as u32).map(message);
+        messages.clone().enumerate().for_each(|(idx, msg)| {
+            poll_messages()
+                .save(
+                    deps.as_mut().storage,
+                    &msg.hash(),
+                    &PollContent::<Message>::new(msg, poll.poll_id, idx),
+                )
+                .unwrap()
+        });
+
+        assert_eq!(
+            PollResponse {
+                poll: poll.clone(),
+                data: PollData::Messages(messages.collect_vec()),
+                status: PollStatus::Expired
+            },
+            super::poll_response(deps.as_ref(), mock_env().block.height, poll.poll_id).unwrap()
+        );
+    }
+
+    fn message(id: u32) -> Message {
         Message {
             cc_id: CrossChainId {
                 chain: "source-chain".parse().unwrap(),
-                id: format!("id{TX_HASH_EVENT_INDEX_SEPARATOR}{id}")
-                    .parse()
-                    .unwrap(),
+                id: HexTxHashAndEventIndex {
+                    tx_hash: [0; 32],
+                    event_index: id,
+                }
+                .to_string()
+                .try_into()
+                .unwrap(),
             },
             source_address: format!("source_address{id}").parse().unwrap(),
             destination_chain: format!("destination-chain{id}").parse().unwrap(),
@@ -214,12 +326,12 @@ mod tests {
         }
     }
 
-    pub fn poll() -> WeightedPoll {
+    pub fn poll(expires_at: u64) -> WeightedPoll {
         let participants: nonempty::Vec<Participant> = vec!["addr1", "addr2", "addr3"]
             .into_iter()
             .map(|participant| Participant {
                 address: Addr::unchecked(participant),
-                weight: nonempty::Uint256::try_from(Uint256::one()).unwrap(),
+                weight: nonempty::Uint128::try_from(Uint128::one()).unwrap(),
             })
             .collect::<Vec<Participant>>()
             .try_into()
@@ -231,6 +343,6 @@ mod tests {
 
         let snapshot = Snapshot::new(threshold.try_into().unwrap(), participants);
 
-        WeightedPoll::new(PollId::from(Uint64::one()), snapshot, 0, 5)
+        WeightedPoll::new(PollId::from(Uint64::one()), snapshot, expires_at, 5)
     }
 }

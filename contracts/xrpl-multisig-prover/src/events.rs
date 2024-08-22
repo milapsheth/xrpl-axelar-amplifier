@@ -18,7 +18,7 @@ pub enum Event {
     },
     XRPLSigningStarted {
         session_id: Uint64,
-        worker_set_id: String,
+        verifier_set_id: String,
         pub_keys: HashMap<String, PublicKey>,
         unsigned_tx: HexBinary,
         expires_at: u64,
@@ -30,13 +30,13 @@ impl From<Event> for cosmwasm_std::Event {
         match other {
             Event::XRPLSigningStarted {
                 session_id,
-                worker_set_id,
+                verifier_set_id,
                 pub_keys,
                 unsigned_tx,
                 expires_at,
             } => cosmwasm_std::Event::new("xrpl_signing_started")
                 .add_attribute("session_id", session_id)
-                .add_attribute("worker_set_id", worker_set_id)
+                .add_attribute("verifier_set_id", verifier_set_id)
                 .add_attribute(
                     "pub_keys",
                     to_string(&pub_keys)

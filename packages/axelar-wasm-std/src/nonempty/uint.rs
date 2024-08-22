@@ -1,7 +1,8 @@
 use std::fmt;
 
-use crate::nonempty::Error;
 use cosmwasm_schema::cw_serde;
+
+use crate::nonempty::Error;
 
 #[cw_serde]
 #[serde(try_from = "cosmwasm_std::Uint64")]
@@ -51,12 +52,6 @@ impl fmt::Display for Uint64 {
 #[cw_serde]
 #[derive(Copy, PartialOrd, Eq)]
 pub struct Uint256(cosmwasm_std::Uint256);
-
-impl Uint256 {
-    pub const fn one() -> Self {
-        Self(cosmwasm_std::Uint256::one())
-    }
-}
 
 impl TryFrom<cosmwasm_std::Uint256> for Uint256 {
     type Error = Error;
@@ -113,6 +108,19 @@ impl TryFrom<cosmwasm_std::Uint128> for Uint128 {
 impl From<Uint128> for cosmwasm_std::Uint128 {
     fn from(value: Uint128) -> Self {
         value.0
+    }
+}
+
+impl TryFrom<u128> for Uint128 {
+    type Error = Error;
+    fn try_from(value: u128) -> Result<Self, Self::Error> {
+        cosmwasm_std::Uint128::from(value).try_into()
+    }
+}
+
+impl Uint128 {
+    pub const fn one() -> Self {
+        Self(cosmwasm_std::Uint128::one())
     }
 }
 
@@ -189,5 +197,11 @@ mod tests {
         let val = Uint256(cosmwasm_std::Uint256::one());
         let converted: &cosmwasm_std::Uint256 = val.as_ref();
         assert_eq!(&val.0, converted);
+    }
+
+    #[test]
+    fn convert_from_uint128_to_non_empty_uint128() {
+        assert!(Uint128::try_from(0u128).is_err());
+        assert!(Uint128::try_from(1u128).is_ok());
     }
 }

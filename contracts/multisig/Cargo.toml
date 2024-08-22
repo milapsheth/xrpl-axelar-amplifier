@@ -1,6 +1,6 @@
 [package]
 name = "multisig"
-version = "0.1.0"
+version = "0.4.1"
 rust-version = { workspace = true }
 edition = "2021"
 description = "Multisig contract"
@@ -29,29 +29,35 @@ library = []
 secp256k1 = []
 # use this feature to enable ed25519 for signature verification
 ed25519 = []
+# use this feature to enable test utils
+test = []
 
 [package.metadata.scripts]
 optimize = """docker run --rm -v "$(pwd)":/code \
   --mount type=volume,source="$(basename "$(pwd)")_cache",target=/code/target \
   --mount type=volume,source=registry_cache,target=/usr/local/cargo/registry \
-  cosmwasm/rust-optimizer:0.12.6
+  cosmwasm/optimizer:0.16.0
 """
 
 [dependencies]
 axelar-wasm-std = { workspace = true }
 axelar-wasm-std-derive = { workspace = true }
-connection-router-api = { workspace = true }
 cosmwasm-crypto = "1.2.7"
 cosmwasm-schema = { workspace = true }
 cosmwasm-std = { workspace = true }
 cw-storage-plus = { workspace = true }
-ed25519-dalek = { version = "2.1.1", default-features = false }
+cw-utils = "1.0.1"
+cw2 = { workspace = true }
+ed25519-dalek = { workspace = true }
 enum-display-derive = "0.1.1"
 error-stack = { workspace = true }
 getrandom = { version = "0.2", default-features = false, features = ["custom"] }
+itertools = "0.11.0"
 k256 = { version = "0.13.1", features = ["ecdsa"] }
+msgs-derive = { workspace = true }
 report = { workspace = true }
 rewards = { workspace = true, features = ["library"] }
+router-api = { workspace = true }
 serde = { version = "1.0.145", default-features = false, features = ["derive"] }
 serde_json = "1.0.89"
 sha3 = { workspace = true }

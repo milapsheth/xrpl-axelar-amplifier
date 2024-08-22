@@ -44,8 +44,9 @@ impl MsgQueue {
 
 #[cfg(test)]
 mod test {
-    use cosmos_sdk_proto::Any;
-    use cosmrs::{bank::MsgSend, tx::Msg, AccountId};
+    use cosmrs::bank::MsgSend;
+    use cosmrs::tx::Msg;
+    use cosmrs::{AccountId, Any};
 
     use super::MsgQueue;
 

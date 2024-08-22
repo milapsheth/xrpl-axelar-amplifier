@@ -1,11 +1,9 @@
-use error_stack::{Result, ResultExt};
 use std::time::Duration;
+
+use error_stack::{Result, ResultExt};
 use thiserror::Error;
-use tokio::{
-    select,
-    sync::watch::{self, Receiver, Sender},
-    time,
-};
+use tokio::sync::watch::{self, Receiver, Sender};
+use tokio::{select, time};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -77,18 +75,16 @@ mod tests {
     use std::convert::TryInto;
     use std::time::Duration;
 
+    use async_trait::async_trait;
     use mockall::mock;
     use tendermint::block::Height;
-    use tokio::test;
-    use tokio::time;
+    use tokio::{test, time};
     use tokio_util::sync::CancellationToken;
 
-    use crate::tm_client;
-
-    use crate::BlockHeightMonitor;
-    use async_trait::async_trait;
+    use crate::{tm_client, BlockHeightMonitor};
 
     #[test]
+    #[allow(clippy::cast_possible_truncation)]
     async fn latest_block_height_should_work() {
         let block: tendermint::Block =
             serde_json::from_str(include_str!("tests/axelar_block.json")).unwrap();

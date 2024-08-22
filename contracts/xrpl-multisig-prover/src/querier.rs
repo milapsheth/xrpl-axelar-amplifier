@@ -1,15 +1,15 @@
 use std::str::FromStr;
 
 use axelar_wasm_std::VerificationStatus;
-use connection_router_api::{ChainName, CrossChainId, Message};
+use router_api::{ChainName, CrossChainId, Message};
 #[cfg(not(feature = "library"))]
 use cosmwasm_schema::serde::{de::DeserializeOwned, Serialize};
 use cosmwasm_std::{to_json_binary, QuerierWrapper, QueryRequest, Uint64, WasmQuery};
-use multisig::{key::PublicKey, msg::Multisig};
+use multisig::{key::PublicKey, multisig::Multisig};
 
 use crate::{error::ContractError, state::Config};
 
-use service_registry::state::WeightedWorker;
+use service_registry::state::WeightedVerifier;
 
 pub const XRPL_CHAIN_NAME: &str = "XRPL";
 
@@ -40,23 +40,23 @@ impl<'a> Querier<'a> {
         Self { querier, config }
     }
 
-    pub fn get_active_workers(&self) -> Result<Vec<WeightedWorker>, ContractError> {
+    pub fn get_active_verifiers(&self) -> Result<Vec<WeightedVerifier>, ContractError> {
         query(
             self.querier,
             self.config.service_registry.to_string(),
-            &service_registry::msg::QueryMsg::GetActiveWorkers {
+            &service_registry::msg::QueryMsg::GetActiveVerifiers {
                 service_name: self.config.service_name.clone(),
                 chain_name: ChainName::from_str(XRPL_CHAIN_NAME).unwrap(),
             },
         )
     }
 
-    pub fn get_public_key(&self, worker_address: String) -> Result<PublicKey, ContractError> {
+    pub fn get_public_key(&self, verifier_address: String) -> Result<PublicKey, ContractError> {
         query(
             self.querier,
             self.config.axelar_multisig.to_string(),
             &multisig::msg::QueryMsg::GetPublicKey {
-                worker_address,
+                verifier_address,
                 key_type: self.config.key_type,
             },
         )

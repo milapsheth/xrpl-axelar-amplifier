@@ -1,5 +1,5 @@
 use axelar_wasm_std::{MajorityThreshold, VerificationStatus};
-use connection_router_api::CrossChainId;
+use router_api::CrossChainId;
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::{HexBinary, Uint64};
 use multisig::key::PublicKey;
@@ -15,9 +15,9 @@ pub struct InstantiateMsg {
     pub xrpl_multisig_address: String,
     pub voting_verifier_address: String,
     pub service_registry_address: String,
-    pub monitoring_address: String,
+    pub coordinator_address: String,
     pub service_name: String,
-    pub worker_set_diff_threshold: u32,
+    pub verifier_set_diff_threshold: u32,
     pub xrpl_fee: u64,
     pub ticket_count_threshold: u32,
     pub available_tickets: Vec<u32>,
@@ -43,8 +43,8 @@ pub enum QueryMsg {
         session_id: Uint64,
     },
 
-    #[returns(multisig::worker_set::WorkerSet)]
-    GetWorkerSet,
+    #[returns(multisig::verifier_set::VerifierSet)]
+    GetVerifierSet,
 
     #[returns(Option<u64>)]
     GetMultisigSessionId { message_id: CrossChainId },
@@ -80,7 +80,7 @@ pub enum ExecuteMsg {
         message_id: CrossChainId,
         message_status: VerificationStatus,
     },
-    UpdateWorkerSet,
+    UpdateVerifierSet,
     TicketCreate,
     UpdateSigningThreshold {
         new_signing_threshold: MajorityThreshold,

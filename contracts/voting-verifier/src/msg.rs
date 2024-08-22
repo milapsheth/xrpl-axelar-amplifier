@@ -1,12 +1,9 @@
+use axelar_wasm_std::msg_id::MessageIdFormat;
+use axelar_wasm_std::voting::{PollId, PollStatus, Vote, WeightedPoll};
+use axelar_wasm_std::{nonempty, MajorityThreshold, VerificationStatus};
 use cosmwasm_schema::{cw_serde, QueryResponses};
-
-use axelar_wasm_std::{
-    nonempty,
-    operators::Operators,
-    voting::{PollId, Vote},
-    MajorityThreshold, VerificationStatus,
-};
-use connection_router_api::{ChainName, CrossChainId, Message};
+use multisig::verifier_set::VerifierSet;
+use router_api::{ChainName, Message};
 
 #[cw_serde]
 pub struct InstantiateMsg {
@@ -30,6 +27,8 @@ pub struct InstantiateMsg {
     pub source_chain: ChainName,
     /// Rewards contract address on axelar.
     pub rewards_address: String,
+    /// Format that incoming messages should use for the id field of CrossChainId
+    pub msg_id_format: MessageIdFormat,
 }
 
 #[cw_serde]
@@ -52,10 +51,10 @@ pub enum ExecuteMsg {
         messages: Vec<Message>,
     },
 
-    // Starts a poll to confirm a worker set update on the external evm gateway
-    VerifyWorkerSet {
+    // Starts a poll to confirm a verifier set update on the external gateway
+    VerifyVerifierSet {
         message_id: nonempty::String,
-        new_operators: Operators,
+        new_verifier_set: VerifierSet,
     },
 
     // Update the threshold used for new polls. Callable only by governance
@@ -65,23 +64,41 @@ pub enum ExecuteMsg {
 }
 
 #[cw_serde]
-pub struct Poll {
-    poll_id: PollId,
-    messages: Vec<Message>,
+pub enum PollData {
+    Messages(Vec<Message>),
+    VerifierSet(VerifierSet),
+}
+#[cw_serde]
+pub struct PollResponse {
+    pub poll: WeightedPoll,
+    pub data: PollData,
+    pub status: PollStatus,
 }
 
 #[cw_serde]
 #[derive(QueryResponses)]
 pub enum QueryMsg {
-    #[returns(Poll)]
+    #[returns(PollResponse)]
     GetPoll { poll_id: PollId },
 
-    #[returns(Vec<(CrossChainId, VerificationStatus)>)]
+    #[returns(Vec<MessageStatus>)]
     GetMessagesStatus { messages: Vec<Message> },
 
     #[returns(VerificationStatus)]
-    GetWorkerSetStatus { new_operators: Operators },
+    GetVerifierSetStatus { new_verifier_set: VerifierSet },
 
     #[returns(MajorityThreshold)]
     GetCurrentThreshold,
+}
+
+#[cw_serde]
+pub struct MessageStatus {
+    pub message: Message,
+    pub status: VerificationStatus,
+}
+
+impl MessageStatus {
+    pub fn new(message: Message, status: VerificationStatus) -> Self {
+        Self { message, status }
+    }
 }

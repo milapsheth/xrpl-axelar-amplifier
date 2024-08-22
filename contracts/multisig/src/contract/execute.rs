@@ -1,30 +1,32 @@
-use connection_router_api::ChainName;
-use cosmwasm_std::{OverflowError, OverflowOperation, WasmMsg};
+use std::collections::HashMap;
+
+use cosmwasm_std::{ensure, OverflowError, OverflowOperation, Storage, WasmMsg};
+use router_api::ChainName;
 use sha3::{Digest, Keccak256};
 use signature_verifier_api::client::SignatureVerifier;
 
-use crate::signing::validate_session_signature;
-use crate::state::{load_session_signatures, save_pub_key, save_signature};
-use crate::worker_set::WorkerSet;
-use crate::{
-    key::{KeyTyped, PublicKey, Signature},
-    signing::SigningSession,
-    state::AUTHORIZED_CALLERS,
-};
-use error_stack::ResultExt;
-
 use super::*;
+use crate::key::{KeyTyped, PublicKey, Signature};
+use crate::signing::{validate_session_signature, SigningSession};
+use crate::state::{load_session_signatures, save_pub_key, save_signature, AUTHORIZED_CALLERS};
+use crate::verifier_set::VerifierSet;
 
 pub fn start_signing_session(
     deps: DepsMut,
     env: Env,
-    worker_set_id: String,
+    verifier_set_id: String,
     msg: MsgToSign,
     chain_name: ChainName,
     sig_verifier: Option<Addr>,
 ) -> Result<Response, ContractError> {
+    ensure!(
+        killswitch::is_contract_active(deps.storage),
+        ContractError::SigningDisabled
+    );
+
     let config = CONFIG.load(deps.storage)?;
-    let worker_set = get_worker_set(deps.storage, &worker_set_id)?;
+
+    let verifier_set = get_verifier_set(deps.storage, &verifier_set_id)?;
 
     let session_id = SIGNING_SESSION_COUNTER.update(
         deps.storage,
@@ -39,7 +41,7 @@ pub fn start_signing_session(
     let expires_at = env
         .block
         .height
-        .checked_add(config.block_expiry)
+        .checked_add(config.block_expiry.into())
         .ok_or_else(|| {
             OverflowError::new(
                 OverflowOperation::Add,
@@ -50,7 +52,7 @@ pub fn start_signing_session(
 
     let signing_session = SigningSession::new(
         session_id,
-        worker_set_id.clone(),
+        verifier_set_id.clone(),
         chain_name.clone(),
         msg.clone(),
         expires_at,
@@ -61,15 +63,15 @@ pub fn start_signing_session(
 
     let event = Event::SigningStarted {
         session_id,
-        worker_set_id,
-        pub_keys: worker_set.get_pub_keys(),
+        verifier_set_id,
+        pub_keys: verifier_set.get_pub_keys(),
         msg,
         chain_name,
         expires_at,
     };
 
     Ok(Response::new()
-        .set_data(to_binary(&session_id)?)
+        .set_data(to_json_binary(&session_id)?)
         .add_event(event.into()))
 }
 
@@ -80,13 +82,18 @@ pub fn submit_signature(
     session_id: Uint64,
     signature: HexBinary,
 ) -> Result<Response, ContractError> {
+    ensure!(
+        killswitch::is_contract_active(deps.storage),
+        ContractError::SigningDisabled
+    );
+
     let config = CONFIG.load(deps.storage)?;
     let mut session = SIGNING_SESSIONS
         .load(deps.storage, session_id.into())
         .map_err(|_| ContractError::SigningSessionNotFound { session_id })?;
-    let worker_set = WORKER_SETS.load(deps.storage, &session.worker_set_id)?;
+    let verifier_set = VERIFIER_SETS.load(deps.storage, &session.verifier_set_id)?;
 
-    let pub_key = match worker_set.signers.get(&info.sender.to_string()) {
+    let pub_key = match verifier_set.signers.get(&info.sender.to_string()) {
         Some(signer) => Ok(&signer.pub_key),
         None => Err(ContractError::NotAParticipant {
             session_id,
@@ -118,7 +125,7 @@ pub fn submit_signature(
 
     let old_state = session.state.clone();
 
-    session.recalculate_session_state(&signatures, &worker_set, env.block.height);
+    session.recalculate_session_state(&signatures, &verifier_set, env.block.height);
     SIGNING_SESSIONS.save(deps.storage, session.id.u64(), &session)?;
 
     let state_changed = old_state != session.state;
@@ -132,12 +139,12 @@ pub fn submit_signature(
     )
 }
 
-pub fn register_worker_set(
+pub fn register_verifier_set(
     deps: DepsMut,
-    worker_set: WorkerSet,
+    verifier_set: VerifierSet,
 ) -> Result<Response, ContractError> {
-    let worker_set_id = worker_set.id();
-    WORKER_SETS.save(deps.storage, &worker_set_id, &worker_set)?;
+    let verifier_set_id = verifier_set.id();
+    VERIFIER_SETS.save(deps.storage, &verifier_set_id, &verifier_set)?;
 
     Ok(Response::default())
 }
@@ -163,7 +170,7 @@ pub fn register_pub_key(
 
     Ok(Response::new().add_event(
         Event::PublicKeyRegistered {
-            worker: info.sender,
+            verifier: info.sender,
             public_key,
         }
         .into(),
@@ -171,35 +178,66 @@ pub fn register_pub_key(
 }
 
 pub fn require_authorized_caller(
-    deps: &DepsMut,
-    contract_address: Addr,
-) -> error_stack::Result<(), ContractError> {
-    AUTHORIZED_CALLERS
-        .load(deps.storage, &contract_address)
-        .change_context(ContractError::Unauthorized)
-}
-
-pub fn authorize_caller(deps: DepsMut, contract_address: Addr) -> Result<Response, ContractError> {
-    AUTHORIZED_CALLERS.save(deps.storage, &contract_address, &())?;
-
-    Ok(Response::new().add_event(Event::CallerAuthorized { contract_address }.into()))
-}
-
-pub fn unauthorize_caller(
-    deps: DepsMut,
-    contract_address: Addr,
-) -> Result<Response, ContractError> {
-    AUTHORIZED_CALLERS.remove(deps.storage, &contract_address);
-
-    Ok(Response::new().add_event(Event::CallerUnauthorized { contract_address }.into()))
-}
-
-pub fn require_governance(deps: &DepsMut, sender: Addr) -> Result<(), ContractError> {
-    let config = CONFIG.load(deps.storage)?;
-    if config.governance != sender {
-        return Err(ContractError::Unauthorized);
+    storage: &dyn Storage,
+    contract_address: &Addr,
+    chain_name: &ChainName,
+) -> Result<Addr, ContractError> {
+    let expected_chain_name = AUTHORIZED_CALLERS.load(storage, contract_address)?;
+    if expected_chain_name != *chain_name {
+        return Err(ContractError::WrongChainName {
+            expected: expected_chain_name,
+        });
     }
-    Ok(())
+    Ok(contract_address.clone())
+}
+
+pub fn authorize_callers(
+    deps: DepsMut,
+    contracts: HashMap<Addr, ChainName>,
+) -> Result<Response, ContractError> {
+    contracts
+        .iter()
+        .map(|(contract_address, chain_name)| {
+            AUTHORIZED_CALLERS.save(deps.storage, contract_address, chain_name)
+        })
+        .try_collect()?;
+
+    Ok(
+        Response::new().add_events(contracts.into_iter().map(|(contract_address, chain_name)| {
+            Event::CallerAuthorized {
+                contract_address,
+                chain_name,
+            }
+            .into()
+        })),
+    )
+}
+
+pub fn unauthorize_callers(
+    deps: DepsMut,
+    contracts: HashMap<Addr, ChainName>,
+) -> Result<Response, ContractError> {
+    contracts.iter().for_each(|(contract_address, _)| {
+        AUTHORIZED_CALLERS.remove(deps.storage, contract_address)
+    });
+
+    Ok(
+        Response::new().add_events(contracts.into_iter().map(|(contract_address, chain_name)| {
+            Event::CallerUnauthorized {
+                contract_address,
+                chain_name,
+            }
+            .into()
+        })),
+    )
+}
+
+pub fn enable_signing(deps: DepsMut) -> Result<Response, ContractError> {
+    killswitch::disengage(deps.storage, Event::SigningEnabled).map_err(|err| err.into())
+}
+
+pub fn disable_signing(deps: DepsMut) -> Result<Response, ContractError> {
+    killswitch::engage(deps.storage, Event::SigningDisabled).map_err(|err| err.into())
 }
 
 fn signing_response(
@@ -211,14 +249,14 @@ fn signing_response(
 ) -> Result<Response, ContractError> {
     let rewards_msg = WasmMsg::Execute {
         contract_addr: rewards_contract,
-        msg: to_binary(&rewards::msg::ExecuteMsg::RecordParticipation {
+        msg: to_json_binary(&rewards::msg::ExecuteMsg::RecordParticipation {
             chain_name: session.chain_name,
             event_id: session
                 .id
                 .to_string()
                 .try_into()
                 .expect("couldn't convert session_id to nonempty string"),
-            worker_address: signer.to_string(),
+            verifier_address: signer.to_string(),
         })?,
         funds: vec![],
     };

@@ -1,13 +1,13 @@
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::broadcaster;
 use crate::commands::ServiceRegistryConfig;
-use crate::handlers::{self, config::deserialize_handler_configs};
+use crate::handlers::config::deserialize_handler_configs;
+use crate::handlers::{self};
 use crate::tofnd::Config as TofndConfig;
 use crate::url::Url;
+use crate::{broadcaster, event_processor};
 
 #[derive(Deserialize, Serialize, Debug, PartialEq)]
 #[serde(default)]
@@ -15,9 +15,7 @@ pub struct Config {
     pub health_check_bind_addr: SocketAddrV4,
     pub tm_jsonrpc: Url,
     pub tm_grpc: Url,
-    pub event_buffer_cap: usize,
-    #[serde(with = "humantime_serde")]
-    pub event_stream_timeout: Duration,
+    pub event_processor: event_processor::Config,
     pub broadcast: broadcaster::Config,
     #[serde(deserialize_with = "deserialize_handler_configs")]
     pub handlers: Vec<handlers::config::Config>,
@@ -33,8 +31,7 @@ impl Default for Config {
             broadcast: broadcaster::Config::default(),
             handlers: vec![],
             tofnd_config: TofndConfig::default(),
-            event_buffer_cap: 100000,
-            event_stream_timeout: Duration::from_secs(15),
+            event_processor: event_processor::Config::default(),
             service_registry: ServiceRegistryConfig::default(),
             health_check_bind_addr: SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 3000),
         }
@@ -51,16 +48,13 @@ mod tests {
     use std::time::Duration;
 
     use cosmrs::AccountId;
-
-    use connection_router_api::ChainName;
-
-    use crate::evm::finalizer::Finalization;
-    use crate::handlers::config::Chain;
-    use crate::handlers::config::Config as HandlerConfig;
-    use crate::types::TMAddress;
-    use crate::url::Url;
+    use router_api::ChainName;
 
     use super::Config;
+    use crate::evm::finalizer::Finalization;
+    use crate::handlers::config::{Chain, Config as HandlerConfig};
+    use crate::types::TMAddress;
+    use crate::url::Url;
 
     const PREFIX: &str = "axelar";
 
@@ -85,7 +79,7 @@ mod tests {
             chain_rpc_url = 'http://localhost:7546/'
 
             [[handlers]]
-            type = 'EvmWorkerSetVerifier'
+            type = 'EvmVerifierSetVerifier'
             cosmwasm_contract = '{}'
             chain_name = 'Ethereum'
             chain_rpc_url = 'http://localhost:7545/'
@@ -95,7 +89,7 @@ mod tests {
             nanos = 0
 
             [[handlers]]
-            type = 'EvmWorkerSetVerifier'
+            type = 'EvmVerifierSetVerifier'
             cosmwasm_contract = '{}'
             chain_name = 'Polygon'
             chain_rpc_url = 'http://localhost:7546/'
@@ -153,17 +147,17 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_handlers_evm_worker_set_verifiers_with_the_same_chain_name() {
+    fn deserialize_handlers_evm_verifier_set_verifiers_with_the_same_chain_name() {
         let config_str = format!(
             "
             [[handlers]]
-            type = 'EvmWorkerSetVerifier'
+            type = 'EvmVerifierSetVerifier'
             cosmwasm_contract = '{}'
             chain_name = 'Ethereum'
             chain_rpc_url = 'http://localhost:7545/'
 
             [[handlers]]
-            type = 'EvmWorkerSetVerifier'
+            type = 'EvmVerifierSetVerifier'
             cosmwasm_contract = '{}'
             chain_name = 'Ethereum'
             chain_rpc_url = 'http://localhost:7546/'
@@ -276,7 +270,7 @@ mod tests {
                         AccountId::new("axelar", &[0u8; 32]).unwrap(),
                     ),
                 },
-                HandlerConfig::EvmWorkerSetVerifier {
+                HandlerConfig::EvmVerifierSetVerifier {
                     cosmwasm_contract: TMAddress::from(
                         AccountId::new("axelar", &[0u8; 32]).unwrap(),
                     ),
@@ -299,7 +293,7 @@ mod tests {
                     rpc_url: Url::from_str("http://127.0.0.1").unwrap(),
                     rpc_timeout: Some(Duration::from_secs(3)),
                 },
-                HandlerConfig::SuiWorkerSetVerifier {
+                HandlerConfig::SuiVerifierSetVerifier {
                     cosmwasm_contract: TMAddress::from(
                         AccountId::new("axelar", &[0u8; 32]).unwrap(),
                     ),

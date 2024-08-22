@@ -29,8 +29,8 @@ pub enum ContractError {
     #[error(transparent)]
     NonEmptyError(#[from] nonempty::Error),
 
-    #[error("worker set has not changed sufficiently since last update")]
-    WorkerSetUnchanged,
+    #[error("verifier set has not changed sufficiently since last update")]
+    VerifierSetUnchanged,
 
     #[error("ticket count threshold has not been reached")]
     TicketCountThresholdNotReached,
@@ -56,8 +56,8 @@ pub enum ContractError {
     #[error("invalid signing threshold")]
     InvalidSigningThreshold,
 
-    #[error("worker set is not set")]
-    WorkerSetIsNotSet,
+    #[error("verifier set is not set")]
+    VerifierSetIsNotSet,
 
     #[error("invalid address")]
     InvalidAddress,
@@ -107,8 +107,8 @@ pub enum ContractError {
     #[error("no available tickets")]
     NoAvailableTickets,
 
-    #[error("no worker set stored")]
-    NoWorkerSet,
+    #[error("no verifier set stored")]
+    NoVerifierSet,
 
     #[error("generic error {0}")]
     GenericError(String),

@@ -20,7 +20,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
-          toolchain: 1.75.0
+          toolchain: 1.78.0
           override: true
 
       - name: Install protoc
@@ -29,9 +29,14 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache build artifacts
-        uses: useblacksmith/rust-cache@v3
+        uses: useblacksmith/rust-cache@v3.0.1
+        id: cache
         with:
-          shared-key: "cache"
+          shared-key: "cache-tests"
+
+      - name: Log crates.toml
+        if: steps.cache.outputs.cache-hit == 'true'
+        run: cat /home/runner/.cargo/.crates.toml
 
       - name: Run tests
         uses: actions-rs/cargo@v1
@@ -52,14 +57,19 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
-          toolchain: 1.75.0
+          toolchain: 1.78.0
           target: wasm32-unknown-unknown
           override: true
 
       - name: Cache build artifacts
-        uses: useblacksmith/rust-cache@v3
+        id: cache
+        uses: useblacksmith/rust-cache@v3.0.1
         with:
-          shared-key: "cache"
+          shared-key: "cache-cosmwasm-compilation"
+
+      - name: Log crates.toml
+        if: steps.cache.outputs.cache-hit == 'true'
+        run: cat /home/runner/.cargo/.crates.toml
 
       - name: Build wasm release
         run: |
@@ -73,7 +83,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: install
-          args: --debug --version 1.3.3 --locked cosmwasm-check
+          args: --version 1.5.5 --locked cosmwasm-check
 
       - name: Check wasm contracts
         run: cosmwasm-check ./target/wasm32-unknown-unknown/release/*.wasm
@@ -84,13 +94,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install stable toolchain
+      - name: Install nightly toolchain
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
-          toolchain: 1.75.0
+          toolchain: nightly
+          components: rustfmt
           override: true
-          components: rustfmt, clippy
 
       - name: Install protoc
         uses: arduino/setup-protoc@v2
@@ -98,9 +108,14 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache build artifacts
-        uses: useblacksmith/rust-cache@v3
+        uses: useblacksmith/rust-cache@v3.0.1
+        id: cache
         with:
-          shared-key: "cache"
+          shared-key: "cache-lints"
+
+      - name: Log crates.toml
+        if: steps.cache.outputs.cache-hit == 'true'
+        run: cat /home/runner/.cargo/.crates.toml
 
       - name: Install cargo-sort
         uses: baptiste0928/cargo-install@v2
@@ -112,6 +127,14 @@ jobs:
         with:
           command: fmt
           args: --all -- --check
+
+      - name: Install stable toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: 1.78.0
+          components: clippy
+          override: true
 
       - name: Run cargo sort
         uses: actions-rs/cargo@v1

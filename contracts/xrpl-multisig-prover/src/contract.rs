@@ -1,8 +1,8 @@
-use std::str::FromStr;
+use std::{collections::HashSet, str::FromStr};
 
 #[cfg(not(feature = "library"))]
 use axelar_wasm_std::{MajorityThreshold, VerificationStatus};
-use connection_router_api::{Address, ChainName, CrossChainId, Message};
+use router_api::{Address, ChainName, CrossChainId, Message};
 use cosmwasm_std::{
     entry_point, to_json_binary, wasm_execute, Addr, Binary, Deps, DepsMut, Env, Fraction,
     HexBinary, MessageInfo, Reply, Response, StdResult, Storage, SubMsg, Uint64,
@@ -19,9 +19,9 @@ use crate::{
     querier::{Querier, XRPL_CHAIN_NAME},
     query, reply,
     state::{
-        Config, AVAILABLE_TICKETS, CONFIG, CURRENT_WORKER_SET, LAST_ASSIGNED_TICKET_NUMBER,
+        Config, AVAILABLE_TICKETS, CONFIG, CURRENT_VERIFIER_SET, LAST_ASSIGNED_TICKET_NUMBER,
         MESSAGE_ID_TO_MULTISIG_SESSION_ID, MULTISIG_SESSION_ID_TO_TX_HASH, NEXT_SEQUENCE_NUMBER,
-        NEXT_WORKER_SET, REPLY_MESSAGE_ID, REPLY_TX_HASH, TOKENS, TRANSACTION_INFO,
+        NEXT_VERIFIER_SET, REPLY_MESSAGE_ID, REPLY_TX_HASH, TOKENS, TRANSACTION_INFO,
     },
     types::*,
     xrpl_multisig,
@@ -45,23 +45,25 @@ pub fn instantiate(
     AVAILABLE_TICKETS.save(deps.storage, &msg.available_tickets)?;
 
     let querier = Querier::new(deps.querier, config.clone());
-    let new_worker_set =
-        axelar_workers::get_active_worker_set(&querier, msg.signing_threshold, env.block.height)?;
+    let new_verifier_set =
+        axelar_workers::get_active_verifiers(&querier, msg.signing_threshold, env.block.height)?;
+    // TODO: calculate verifier_union_set
 
-    CURRENT_WORKER_SET.save(deps.storage, &new_worker_set.clone())?;
+    CURRENT_VERIFIER_SET.save(deps.storage, &new_verifier_set.clone())?;
 
     Ok(Response::new()
         .add_message(wasm_execute(
             config.axelar_multisig,
-            &multisig::msg::ExecuteMsg::RegisterWorkerSet {
-                worker_set: new_worker_set.clone().into(),
+            &multisig::msg::ExecuteMsg::RegisterVerifierSet {
+                verifier_set: new_verifier_set.clone().into(),
             },
             vec![],
         )?)
         .add_message(wasm_execute(
-            config.monitoring,
-            &monitoring::msg::ExecuteMsg::SetActiveVerifiers {
-                next_worker_set: new_worker_set.into(),
+            config.coordinator,
+            &coordinator::msg::ExecuteMsg::SetActiveVerifiers {
+                // TODO: check all_active_verifiers in multisig_prover
+                verifiers: new_verifier_set.signers.into_iter().map(|signer| signer.address.clone()).collect::<HashSet<Addr>>(),
             },
             vec![],
         )?))
@@ -75,7 +77,7 @@ fn make_config(
     let governance = deps.api.addr_validate(&msg.governance_address)?;
     let relayer = deps.api.addr_validate(&msg.relayer_address)?;
     let axelar_multisig = deps.api.addr_validate(&msg.axelar_multisig_address)?;
-    let monitoring = deps.api.addr_validate(&msg.monitoring_address)?;
+    let coordinator = deps.api.addr_validate(&msg.coordinator_address)?;
     let gateway = deps.api.addr_validate(&msg.gateway_address)?;
     let voting_verifier = deps.api.addr_validate(&msg.voting_verifier_address)?;
     let service_registry = deps.api.addr_validate(&msg.service_registry_address)?;
@@ -91,14 +93,14 @@ fn make_config(
         governance,
         relayer,
         axelar_multisig,
-        monitoring,
+        coordinator,
         gateway,
         xrpl_multisig: msg.xrpl_multisig_address,
         signing_threshold: msg.signing_threshold,
         voting_verifier,
         service_registry,
         service_name: msg.service_name,
-        worker_set_diff_threshold: msg.worker_set_diff_threshold,
+        verifier_set_diff_threshold: msg.verifier_set_diff_threshold,
         xrpl_fee: msg.xrpl_fee,
         ticket_count_threshold: msg.ticket_count_threshold,
         key_type: multisig::key::KeyType::Ecdsa,
@@ -187,7 +189,7 @@ pub fn execute(
                 &coin,
             )
         }
-        ExecuteMsg::UpdateWorkerSet {} => {
+        ExecuteMsg::UpdateVerifierSet {} => {
             require_admin(&deps, info.clone()).or_else(|_| require_governance(&deps, info))?;
             construct_signer_list_set_proof(deps.storage, &querier, env, &config)
         }
@@ -279,15 +281,15 @@ pub fn start_signing_session(
     self_address: Addr,
 ) -> Result<Response, ContractError> {
     REPLY_TX_HASH.save(storage, &tx_hash)?;
-    let cur_worker_set_id = match CURRENT_WORKER_SET.may_load(storage)? {
-        Some(worker_set) => Into::<multisig::worker_set::WorkerSet>::into(worker_set).id(),
+    let cur_verifier_set_id = match CURRENT_VERIFIER_SET.may_load(storage)? {
+        Some(verifier_set) => Into::<multisig::verifier_set::VerifierSet>::into(verifier_set).id(),
         None => {
-            return Err(ContractError::NoWorkerSet);
+            return Err(ContractError::NoVerifierSet);
         }
     };
 
     let start_sig_msg: multisig::msg::ExecuteMsg = multisig::msg::ExecuteMsg::StartSigningSession {
-        worker_set_id: cur_worker_set_id,
+        verifier_set_id: cur_verifier_set_id,
         chain_name: ChainName::from_str(XRPL_CHAIN_NAME).unwrap(),
         msg: tx_hash.into(),
         sig_verifier: Some(self_address.into()),
@@ -304,24 +306,24 @@ fn construct_signer_list_set_proof(
     env: Env,
     config: &Config,
 ) -> Result<Response, ContractError> {
-    if !CURRENT_WORKER_SET.exists(storage) {
-        return Err(ContractError::WorkerSetIsNotSet);
+    if !CURRENT_VERIFIER_SET.exists(storage) {
+        return Err(ContractError::VerifierSetIsNotSet);
     }
 
-    let new_worker_set =
-        axelar_workers::get_active_worker_set(querier, config.signing_threshold, env.block.height)?;
-    let cur_worker_set = CURRENT_WORKER_SET.load(storage)?;
-    if !axelar_workers::should_update_worker_set(
-        &new_worker_set.clone().into(),
-        &cur_worker_set.clone().into(),
-        usize::try_from(config.worker_set_diff_threshold).unwrap(),
+    let new_verifier_set =
+        axelar_workers::get_active_verifiers(querier, config.signing_threshold, env.block.height)?;
+    let cur_verifier_set = CURRENT_VERIFIER_SET.load(storage)?;
+    if !axelar_workers::should_update_verifier_set(
+        &new_verifier_set.clone().into(),
+        &cur_verifier_set.clone().into(),
+        usize::try_from(config.verifier_set_diff_threshold).unwrap(),
     ) {
-        return Err(ContractError::WorkerSetUnchanged);
+        return Err(ContractError::VerifierSetUnchanged);
     }
 
-    let tx_hash = xrpl_multisig::issue_signer_list_set(storage, config, cur_worker_set)?;
+    let tx_hash = xrpl_multisig::issue_signer_list_set(storage, config, cur_verifier_set)?;
 
-    NEXT_WORKER_SET.save(storage, &tx_hash, &new_worker_set)?;
+    NEXT_VERIFIER_SET.save(storage, &tx_hash, &new_verifier_set)?;
 
     start_signing_session(storage, config, tx_hash, env.contract.address)
 }
@@ -373,14 +375,11 @@ fn update_tx_status(
     };
 
     let xrpl_signers: Vec<XRPLSigner> = multisig_session
+        .verifier_set
         .signers
-        .iter()
-        .filter(|(signer, _)| signer_public_keys.contains(&signer.pub_key))
-        .filter_map(|(signer, signature)| {
-            signature
-                .as_ref()
-                .map(|signature| XRPLSigner::try_from((signer.clone(), signature.clone())))
-        })
+        .into_iter()
+        .filter(|(_, signer)| signer_public_keys.contains(&signer.pub_key))
+        .map(XRPLSigner::try_from)
         .collect::<Result<Vec<_>, ContractError>>()?;
 
     if xrpl_signers.len() != signer_public_keys.len() {
@@ -391,7 +390,7 @@ fn update_tx_status(
     let tx_blob = HexBinary::from(signed_tx.xrpl_serialize()?);
     let tx_hash: HexBinary = xrpl_multisig::compute_signed_tx_hash(tx_blob.as_slice())?.into();
 
-    if parse_message_id(&message_id.id)
+    if parse_message_id(message_id.clone().id, &XRPL_MESSAGE_ID_FORMAT)
         .map_err(|_| ContractError::InvalidMessageID(message_id.id.to_string()))?
         .0
         .to_string()
@@ -446,7 +445,7 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
             &multisig::key::Signature::try_from((multisig::key::KeyType::Ecdsa, signature))
                 .map_err(|_| ContractError::InvalidSignature)?,
         )?),
-        QueryMsg::GetWorkerSet {} => to_json_binary(&query::get_worker_set(deps.storage)?),
+        QueryMsg::GetVerifierSet {} => to_json_binary(&query::get_verifier_set(deps.storage)?),
         QueryMsg::GetMultisigSessionId { message_id } => {
             to_json_binary(&query::get_multisig_session_id(deps.storage, &message_id)?)
         } // TODO: rename

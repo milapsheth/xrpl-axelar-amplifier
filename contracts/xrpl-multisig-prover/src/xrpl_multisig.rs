@@ -1,16 +1,16 @@
 use axelar_wasm_std::nonempty;
-use connection_router_api::CrossChainId;
-use cosmwasm_std::{wasm_execute, HexBinary, Response, Storage};
+use router_api::CrossChainId;
+use cosmwasm_std::{wasm_execute, Addr, HexBinary, Response, Storage};
 use sha2::{Digest, Sha256, Sha512};
-use std::str::FromStr;
+use std::{collections::HashSet, str::FromStr};
 
 use crate::{
-    axelar_workers::WorkerSet,
+    axelar_workers::VerifierSet,
     error::ContractError,
     state::{
-        Config, AVAILABLE_TICKETS, CONFIRMED_TRANSACTIONS, CURRENT_WORKER_SET,
+        Config, AVAILABLE_TICKETS, CONFIRMED_TRANSACTIONS, CURRENT_VERIFIER_SET,
         LAST_ASSIGNED_TICKET_NUMBER, LATEST_SEQUENTIAL_TX_HASH, MESSAGE_ID_TO_TICKET,
-        NEXT_SEQUENCE_NUMBER, NEXT_WORKER_SET, TRANSACTION_INFO,
+        NEXT_SEQUENCE_NUMBER, NEXT_VERIFIER_SET, TRANSACTION_INFO,
     },
     types::*,
 };
@@ -88,7 +88,7 @@ pub fn issue_ticket_create(
 pub fn issue_signer_list_set(
     storage: &mut dyn Storage,
     config: &Config,
-    workers: WorkerSet,
+    verifier_set: VerifierSet,
 ) -> Result<TxHash, ContractError> {
     let sequence_number = get_next_sequence_number(storage)?;
 
@@ -96,8 +96,8 @@ pub fn issue_signer_list_set(
         account: XRPLAccountId::from_str(config.xrpl_multisig.as_str())?,
         fee: config.xrpl_fee,
         sequence: XRPLSequence::Plain(sequence_number),
-        signer_quorum: workers.quorum,
-        signer_entries: workers
+        signer_quorum: verifier_set.quorum,
+        signer_entries: verifier_set
             .signers
             .into_iter()
             .map(XRPLSignerEntry::from)
@@ -150,22 +150,30 @@ pub fn update_tx_status(
             Response::default()
         }
         XRPLUnsignedTx::SignerListSet(_tx) => {
-            let next_worker_set = NEXT_WORKER_SET.load(storage, &unsigned_tx_hash)?;
-            CURRENT_WORKER_SET.save(storage, &next_worker_set)?;
-            NEXT_WORKER_SET.remove(storage, &unsigned_tx_hash);
+            let next_verifier_set = NEXT_VERIFIER_SET.load(storage, &unsigned_tx_hash)?;
+            // TODO: let verifier_union_set = all_active_verifiers(&deps)?;
+            CURRENT_VERIFIER_SET.save(storage, &next_verifier_set)?;
+            NEXT_VERIFIER_SET.remove(storage, &unsigned_tx_hash);
+
+            let verifiers: multisig::verifier_set::VerifierSet = next_verifier_set.clone().into();
 
             Response::new()
                 .add_message(wasm_execute(
                     config.axelar_multisig.clone(),
-                    &multisig::msg::ExecuteMsg::RegisterWorkerSet {
-                        worker_set: next_worker_set.clone().into(),
+                    &multisig::msg::ExecuteMsg::RegisterVerifierSet {
+                        verifier_set: next_verifier_set.clone().into(),
                     },
                     vec![],
                 )?)
                 .add_message(wasm_execute(
-                    config.monitoring.clone(),
-                    &monitoring::msg::ExecuteMsg::SetActiveVerifiers {
-                        next_worker_set: next_worker_set.into(),
+                    config.coordinator.clone(),
+                    &coordinator::msg::ExecuteMsg::SetActiveVerifiers {
+                        // TODO: all_active_verifiers
+                        verifiers: verifiers
+                            .signers
+                            .values()
+                            .map(|signer| signer.address.clone())
+                            .collect::<HashSet<Addr>>(),
                     },
                     vec![],
                 )?)

@@ -1,66 +1,61 @@
-use std::convert::TryInto;
 use std::iter;
 use std::time::Duration;
 
-use error_stack::ResultExt;
-use error_stack::{FutureExt, Report, Result};
+use error_stack::{FutureExt, Report, Result, ResultExt};
+use events::Event;
 use futures::TryStreamExt;
-use tendermint::abci;
+use mockall::automock;
 use tendermint::block;
 use thiserror::Error;
-use tokio::select;
 use tokio::sync::broadcast::{self, Sender};
-use tokio::time;
+use tokio::{select, time};
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::{Stream, StreamExt};
+use tokio_stream::Stream;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
-
-use events::Event;
 
 use crate::asyncutil::future::{self, RetryPolicy};
 use crate::tm_client::TmClient;
 
+#[automock]
+pub trait EventSub {
+    fn subscribe(
+        &self,
+    ) -> impl Stream<Item = Result<Event, BroadcastStreamRecvError>> + Send + 'static;
+}
+
+pub struct EventSubscriber {
+    tx: Sender<Event>,
+}
+
+impl EventSub for EventSubscriber {
+    fn subscribe(&self) -> impl Stream<Item = Result<Event, BroadcastStreamRecvError>> + 'static {
+        BroadcastStream::new(self.tx.subscribe()).map_err(Report::from)
+    }
+}
+
 pub struct EventPublisher<T: TmClient + Sync> {
-    client: T,
-    start_from: Option<block::Height>,
+    tm_client: T,
     poll_interval: Duration,
     tx: Sender<Event>,
 }
 
 impl<T: TmClient + Sync> EventPublisher<T> {
-    pub fn new(client: T, capacity: usize) -> Self {
+    pub fn new(client: T, capacity: usize) -> (Self, EventSubscriber) {
         let (tx, _) = broadcast::channel::<Event>(capacity);
-
-        EventPublisher {
-            client,
-            start_from: None,
+        let publisher = EventPublisher {
+            tm_client: client,
             poll_interval: Duration::new(5, 0),
-            tx,
-        }
-    }
+            tx: tx.clone(),
+        };
+        let subscriber = EventSubscriber { tx };
 
-    pub fn start_from(mut self, height: block::Height) -> Self {
-        self.start_from = Some(height);
-        self
-    }
-
-    #[allow(dead_code)]
-    pub fn poll_interval(mut self, poll_interval: Duration) -> Self {
-        self.poll_interval = poll_interval;
-        self
-    }
-
-    pub fn subscribe(&mut self) -> impl Stream<Item = Result<Event, BroadcastStreamRecvError>> {
-        BroadcastStream::new(self.tx.subscribe()).map_err(Report::from)
+        (publisher, subscriber)
     }
 
     pub async fn run(mut self, token: CancellationToken) -> Result<(), EventSubError> {
-        let mut curr_block_height = match self.start_from {
-            Some(start_from) => start_from,
-            None => self.latest_block_height().await?,
-        };
+        let mut curr_block_height = self.latest_block_height().await?;
         let mut interval = time::interval(self.poll_interval);
 
         loop {
@@ -79,7 +74,7 @@ impl<T: TmClient + Sync> EventPublisher<T> {
 
     async fn latest_block_height(&self) -> Result<block::Height, EventSubError> {
         let res = self
-            .client
+            .tm_client
             .latest_block()
             .change_context(EventSubError::Rpc)
             .await?;
@@ -112,36 +107,35 @@ impl<T: TmClient + Sync> EventPublisher<T> {
     }
 
     async fn process_block(&self, height: block::Height) -> Result<(), EventSubError> {
+        // skip processing if there are no subscribers
+        if self.tx.receiver_count() == 0 {
+            return Ok(());
+        }
+
         let events = iter::once(Event::BlockBegin(height))
-            .chain(
-                self.events(height)
-                    .await?
-                    .into_iter()
-                    .map(|event| event.try_into())
-                    .collect::<Result<Vec<_>, _>>()
-                    .change_context(EventSubError::Publish)?,
-            )
+            .chain(self.events(height).await?.into_iter())
             .chain(iter::once(Event::BlockEnd(height)));
 
         for event in events {
-            self.tx.send(event).change_context(EventSubError::Publish)?;
+            // ignore the error if there are no subscribers
+            let _ = self.tx.send(event);
         }
 
         Ok(())
     }
 
-    async fn events(&self, block_height: block::Height) -> Result<Vec<abci::Event>, EventSubError> {
+    async fn events(&self, block_height: block::Height) -> Result<Vec<Event>, EventSubError> {
         let block_results = future::with_retry(
             || {
-                self.client
-                    .block_results(block_height)
-                    .change_context(EventSubError::EventQuery {
+                self.tm_client.block_results(block_height).change_context(
+                    EventSubError::EventQuery {
                         block: block_height,
-                    })
+                    },
+                )
             },
             RetryPolicy::RepeatConstant {
                 sleep: Duration::from_secs(1),
-                max_attempts: 3,
+                max_attempts: 15,
             },
         )
         .await?;
@@ -154,28 +148,22 @@ impl<T: TmClient + Sync> EventPublisher<T> {
             .flat_map(|tx| tx.events);
         let end_block_events = block_results.end_block_events.into_iter().flatten();
 
-        Ok(begin_block_events
+        begin_block_events
             .chain(tx_events)
             .chain(end_block_events)
-            .collect())
+            .map(|event| Event::try_from(event).change_context(EventSubError::EventDecoding))
+            .collect()
     }
-}
-
-pub fn skip_to_block<E>(
-    stream: impl Stream<Item = Result<Event, E>>,
-    height: block::Height,
-) -> impl Stream<Item = Result<Event, E>> {
-    stream.skip_while(move |event| !matches!(event, Ok(Event::BlockBegin(h)) if *h >= height))
 }
 
 #[derive(Error, Debug)]
 pub enum EventSubError {
     #[error("querying events for block {block} failed")]
     EventQuery { block: block::Height },
-    #[error("failed to send events to subscribers")]
-    Publish,
     #[error("failed calling RPC method")]
     Rpc,
+    #[error("decoding event failed")]
+    EventDecoding,
 }
 
 #[cfg(test)]
@@ -186,110 +174,19 @@ mod tests {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
     use futures::stream::StreamExt;
+    use mockall::predicate::eq;
     use rand::Rng;
     use random_string::generate;
-    use tendermint::block;
     use tendermint::{abci, AppHash};
-    use tokio::sync::mpsc;
+    use tokio::sync::{mpsc, oneshot};
     use tokio::test;
-    use tokio_stream::wrappers::ReceiverStream;
     use tokio_util::sync::CancellationToken;
 
-    use crate::event_sub::{skip_to_block, Event, EventPublisher};
+    use crate::event_sub::{Event, EventPublisher, EventSub};
     use crate::tm_client;
 
     #[test]
-    async fn skip_to_block_should_work() {
-        let (tx, rx) = mpsc::channel(100);
-        let skip_to: block::Height = 5u32.into();
-
-        for i in 1u32..10 {
-            tx.send(Event::BlockBegin(i.into())).await.unwrap();
-            tx.send(Event::BlockEnd(i.into())).await.unwrap();
-        }
-
-        let mut stream = skip_to_block::<()>(ReceiverStream::new(rx).map(Ok), skip_to);
-
-        assert_eq!(
-            stream.next().await.unwrap().unwrap(),
-            Event::BlockBegin(skip_to)
-        );
-        assert_eq!(
-            stream.next().await.unwrap().unwrap(),
-            Event::BlockEnd(skip_to)
-        );
-        assert_eq!(
-            stream.next().await.unwrap().unwrap(),
-            Event::BlockBegin(skip_to.increment())
-        );
-        assert_eq!(
-            stream.next().await.unwrap().unwrap(),
-            Event::BlockEnd(skip_to.increment())
-        );
-    }
-
-    #[test]
-    async fn start_from_should_work() {
-        let block_count = 10;
-        let block: tendermint::Block =
-            serde_json::from_str(include_str!("tests/axelar_block.json")).unwrap();
-        let from_height = (block.header.height.value() - block_count + 1)
-            .try_into()
-            .unwrap();
-        let to_height = block.header.height;
-
-        let mut mock_client = tm_client::MockTmClient::new();
-        mock_client.expect_latest_block().once().returning(move || {
-            Ok(tm_client::BlockResponse {
-                block_id: Default::default(),
-                block: block.clone(),
-            })
-        });
-        mock_client
-            .expect_block_results()
-            .times(block_count as usize)
-            .returning(|height| {
-                Ok(tm_client::BlockResultsResponse {
-                    height,
-                    begin_block_events: None,
-                    end_block_events: None,
-                    consensus_param_updates: None,
-                    txs_results: None,
-                    validator_updates: vec![],
-                    app_hash: AppHash::default(),
-                    finalize_block_events: vec![],
-                })
-            });
-
-        let token = CancellationToken::new();
-        let event_publisher = EventPublisher::new(mock_client, 2 * block_count as usize);
-        let mut client = event_publisher.start_from(from_height);
-        let mut stream = client.subscribe();
-
-        let child_token = token.child_token();
-        let handle = tokio::spawn(async move { client.run(child_token).await });
-
-        for height in from_height.value()..to_height.value() {
-            let event = stream.next().await;
-            assert_eq!(
-                event.unwrap().unwrap(),
-                Event::BlockBegin(height.try_into().unwrap())
-            );
-
-            let event = stream.next().await;
-            assert_eq!(
-                event.unwrap().unwrap(),
-                Event::BlockEnd(height.try_into().unwrap())
-            );
-        }
-
-        token.cancel();
-
-        assert!(handle.await.is_ok());
-    }
-
-    #[test]
-    async fn should_start_from_latest_when_none_is_given() {
+    async fn should_start_from_the_latest_block() {
         let block: tendermint::Block =
             serde_json::from_str(include_str!("tests/axelar_block.json")).unwrap();
         let height = block.header.height;
@@ -321,8 +218,8 @@ mod tests {
             });
 
         let token = CancellationToken::new();
-        let mut event_publisher = EventPublisher::new(mock_client, 10);
-        let mut stream = event_publisher.subscribe();
+        let (event_publisher, event_subcriber) = EventPublisher::new(mock_client, 10);
+        let mut stream = event_subcriber.subscribe();
 
         let child_token = token.child_token();
         let handle = tokio::spawn(async move { event_publisher.run(child_token).await });
@@ -333,6 +230,73 @@ mod tests {
         token.cancel();
 
         assert!(handle.await.is_ok());
+    }
+
+    #[test]
+    async fn should_skip_processing_blocks_when_no_subscriber_exists() {
+        let latest_block: tendermint::Block =
+            serde_json::from_str(include_str!("tests/axelar_block.json")).unwrap();
+        let latest_block_height = latest_block.header.height;
+
+        let (sub_tx, mut sub_rx) = oneshot::channel::<()>();
+        let (pub_tx, mut pub_rx) = mpsc::channel::<i32>(100);
+
+        let mut mock_client = tm_client::MockTmClient::new();
+        let mut call_count = 0;
+        mock_client.expect_latest_block().returning(move || {
+            call_count += 1;
+            let _ = pub_tx.try_send(call_count);
+
+            let mut block = latest_block.clone();
+            if sub_rx.try_recv().is_ok() {
+                block.header.height = block.header.height.increment();
+            }
+
+            Ok(tm_client::BlockResponse {
+                block_id: Default::default(),
+                block,
+            })
+        });
+        let latest_block_height = latest_block_height.increment();
+        mock_client
+            .expect_block_results()
+            .with(eq(latest_block_height))
+            .return_once(|height| {
+                Ok(tm_client::BlockResultsResponse {
+                    height,
+                    begin_block_events: None,
+                    end_block_events: None,
+                    consensus_param_updates: None,
+                    txs_results: None,
+                    validator_updates: vec![],
+                    app_hash: AppHash::default(),
+                    finalize_block_events: vec![],
+                })
+            });
+
+        let token = CancellationToken::new();
+        let (mut event_publisher, event_subcriber) = EventPublisher::new(mock_client, 100);
+        event_publisher.poll_interval = Duration::from_millis(500);
+        let handle = tokio::spawn(event_publisher.run(token.child_token()));
+
+        while let Some(call_count) = pub_rx.recv().await {
+            if call_count >= 2 {
+                break;
+            }
+        }
+        let mut stream = event_subcriber.subscribe();
+        sub_tx.send(()).unwrap();
+        assert_eq!(
+            stream.next().await.unwrap().unwrap(),
+            Event::BlockBegin(latest_block_height)
+        );
+        assert_eq!(
+            stream.next().await.unwrap().unwrap(),
+            Event::BlockEnd(latest_block_height)
+        );
+
+        token.cancel();
+        handle.await.unwrap().unwrap();
     }
 
     #[test]
@@ -384,18 +348,27 @@ mod tests {
         let mut latest_block_call_count = 0;
         mock_client
             .expect_latest_block()
-            .times(block_count)
-            .returning(move || {
-                let mut block = block.clone();
-                block.header.height = (block_height.value() + latest_block_call_count)
-                    .try_into()
-                    .unwrap();
+            .times(block_count + 1)
+            .returning(move || match latest_block_call_count {
+                0 => {
+                    latest_block_call_count += 1;
+                    Ok(tm_client::BlockResponse {
+                        block_id: Default::default(),
+                        block: block.clone(),
+                    })
+                }
+                _ => {
+                    let mut block = block.clone();
+                    block.header.height = (block_height.value() + latest_block_call_count - 1)
+                        .try_into()
+                        .unwrap();
 
-                latest_block_call_count += 1;
-                Ok(tm_client::BlockResponse {
-                    block_id: Default::default(),
-                    block,
-                })
+                    latest_block_call_count += 1;
+                    Ok(tm_client::BlockResponse {
+                        block_id: Default::default(),
+                        block,
+                    })
+                }
             });
         mock_client
             .expect_block_results()
@@ -408,14 +381,13 @@ mod tests {
             });
 
         let token = CancellationToken::new();
-        let event_publisher = EventPublisher::new(mock_client, block_count * event_count_per_block);
-        let mut client = event_publisher
-            .start_from(block_height)
-            .poll_interval(Duration::new(0, 1e7 as u32));
-        let mut stream = client.subscribe();
+        let (mut event_publisher, event_subcriber) =
+            EventPublisher::new(mock_client, block_count * event_count_per_block);
+        event_publisher.poll_interval = Duration::from_millis(10);
+        let mut stream = event_subcriber.subscribe();
 
         let child_token = token.child_token();
-        let handle = tokio::spawn(async move { client.run(child_token).await });
+        let handle = tokio::spawn(async move { event_publisher.run(child_token).await });
 
         for i in 1..(block_count * event_count_per_block + 1) {
             let event = stream.next().await;

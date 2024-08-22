@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use error_stack::{self, Report, ResultExt};
-use ethers::types::U64;
+use ethers_core::types::U64;
 use mockall::automock;
 use serde::{Deserialize, Serialize};
 
@@ -116,13 +116,12 @@ where
 
 #[cfg(test)]
 mod tests {
+    use ethers_core::abi::Hash;
+    use ethers_core::types::{Block, U64};
+    use tokio::test;
+
     use crate::evm::finalizer::{pick, ConfirmationHeightFinalizer, Finalization, Finalizer};
     use crate::evm::json_rpc::MockEthereumClient;
-    use ethers::{
-        abi::Hash,
-        types::{Block, U64},
-    };
-    use tokio::test;
 
     #[test]
     async fn latest_finalized_block_height_should_work() {

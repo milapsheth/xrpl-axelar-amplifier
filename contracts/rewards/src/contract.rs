@@ -1,18 +1,38 @@
-use axelar_wasm_std::nonempty;
+use axelar_wasm_std::{nonempty, permission_control};
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
-use cosmwasm_std::{to_binary, BankMsg, Binary, Coin, Deps, DepsMut, Env, MessageInfo, Response};
+use cosmwasm_std::{
+    to_json_binary, BankMsg, Binary, Coin, Deps, DepsMut, Empty, Env, MessageInfo, Response,
+};
 use error_stack::ResultExt;
 use itertools::Itertools;
 
-use crate::{
-    error::ContractError,
-    msg::{ExecuteMsg, InstantiateMsg, QueryMsg},
-    state::{self, Config, Epoch, ParamsSnapshot, PoolId, CONFIG, PARAMS},
-};
+use crate::contract::migrations::v0_4_0;
+use crate::error::ContractError;
+use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
+use crate::state::{self, Config, Epoch, ParamsSnapshot, PoolId, CONFIG, PARAMS};
 
 mod execute;
+mod migrations;
 mod query;
+
+const CONTRACT_NAME: &str = env!("CARGO_PKG_NAME");
+const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[cfg_attr(not(feature = "library"), entry_point)]
+pub fn migrate(
+    deps: DepsMut,
+    _env: Env,
+    _msg: Empty,
+) -> Result<Response, axelar_wasm_std::ContractError> {
+    v0_4_0::migrate(deps.storage)?;
+
+    // any version checks should be done before here
+
+    cw2::set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
+
+    Ok(Response::default())
+}
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
@@ -21,12 +41,14 @@ pub fn instantiate(
     _info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, axelar_wasm_std::ContractError> {
+    cw2::set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
+
     let governance = deps.api.addr_validate(&msg.governance_address)?;
+    permission_control::set_governance(deps.storage, &governance)?;
 
     CONFIG.save(
         deps.storage,
         &Config {
-            governance,
             rewards_denom: msg.rewards_denom,
         },
     )?;
@@ -52,25 +74,24 @@ pub fn execute(
     info: MessageInfo,
     msg: ExecuteMsg,
 ) -> Result<Response, axelar_wasm_std::ContractError> {
-    match msg {
+    match msg.ensure_permissions(deps.storage, &info.sender)? {
         ExecuteMsg::RecordParticipation {
             chain_name,
             event_id,
-            worker_address,
+            verifier_address,
         } => {
-            let worker_address = deps.api.addr_validate(&worker_address)?;
+            let verifier_address = deps.api.addr_validate(&verifier_address)?;
             let pool_id = PoolId {
                 chain_name,
-                contract: info.sender.clone(),
+                contract: info.sender,
             };
             execute::record_participation(
                 deps.storage,
                 event_id,
-                worker_address,
+                verifier_address,
                 pool_id,
                 env.block.height,
-            )
-            .map_err(axelar_wasm_std::ContractError::from)?;
+            )?;
 
             Ok(Response::new())
         }
@@ -100,8 +121,7 @@ pub fn execute(
             deps.api.addr_validate(pool_id.contract.as_str())?;
 
             let rewards =
-                execute::distribute_rewards(deps.storage, pool_id, env.block.height, epoch_count)
-                    .map_err(axelar_wasm_std::ContractError::from)?;
+                execute::distribute_rewards(deps.storage, pool_id, env.block.height, epoch_count)?;
 
             let msgs = rewards
                 .into_iter()
@@ -117,7 +137,7 @@ pub fn execute(
             Ok(Response::new().add_messages(msgs))
         }
         ExecuteMsg::UpdateParams { params } => {
-            execute::update_params(deps.storage, params, env.block.height, info.sender)?;
+            execute::update_params(deps.storage, params, env.block.height)?;
 
             Ok(Response::new())
         }
@@ -133,7 +153,13 @@ pub fn query(
     match msg {
         QueryMsg::RewardsPool { pool_id } => {
             let pool = query::rewards_pool(deps.storage, pool_id, env.block.height)?;
-            to_binary(&pool)
+            to_json_binary(&pool)
+                .change_context(ContractError::SerializeResponse)
+                .map_err(axelar_wasm_std::ContractError::from)
+        }
+        QueryMsg::VerifierParticipation { pool_id, epoch_num } => {
+            let tally = query::participation(deps.storage, pool_id, epoch_num, env.block.height)?;
+            to_json_binary(&tally)
                 .change_context(ContractError::SerializeResponse)
                 .map_err(axelar_wasm_std::ContractError::from)
         }
@@ -142,14 +168,26 @@ pub fn query(
 
 #[cfg(test)]
 mod tests {
-    use connection_router_api::ChainName;
+    use cosmwasm_std::testing::{mock_dependencies, mock_env};
     use cosmwasm_std::{coins, Addr, BlockInfo, Uint128};
     use cw_multi_test::{App, ContractWrapper, Executor};
+    use router_api::ChainName;
 
+    use super::*;
     use crate::msg::{ExecuteMsg, InstantiateMsg, Params, QueryMsg, RewardsPool};
     use crate::state::PoolId;
 
-    use super::{execute, instantiate, query};
+    #[test]
+    fn migrate_sets_contract_version() {
+        let mut deps = mock_dependencies();
+        v0_4_0::tests::instantiate_contract(deps.as_mut(), "denom");
+
+        migrate(deps.as_mut(), mock_env(), Empty {}).unwrap();
+
+        let contract_version = cw2::get_contract_version(deps.as_mut().storage).unwrap();
+        assert_eq!(contract_version.contract, CONTRACT_NAME);
+        assert_eq!(contract_version.version, CONTRACT_VERSION);
+    }
 
     /// Tests that the contract entry points (instantiate, query and execute) work as expected.
     /// Instantiates the contract and calls each of the 4 ExecuteMsg variants.
@@ -159,8 +197,8 @@ mod tests {
     fn test_rewards_flow() {
         let chain_name: ChainName = "mock-chain".parse().unwrap();
         let user = Addr::unchecked("user");
-        let worker = Addr::unchecked("worker");
-        let worker_contract = Addr::unchecked("worker contract");
+        let verifier = Addr::unchecked("verifier");
+        let pool_contract = Addr::unchecked("pool_contract");
 
         const AXL_DENOMINATION: &str = "uaxl";
         let mut app = App::new(|router, _, storage| {
@@ -195,7 +233,7 @@ mod tests {
 
         let pool_id = PoolId {
             chain_name: chain_name.clone(),
-            contract: worker_contract.clone(),
+            contract: pool_contract.clone(),
         };
 
         let rewards = 200;
@@ -224,24 +262,24 @@ mod tests {
         assert!(res.is_ok());
 
         let res = app.execute_contract(
-            worker_contract.clone(),
+            pool_contract.clone(),
             contract_address.clone(),
             &ExecuteMsg::RecordParticipation {
                 chain_name: chain_name.clone(),
                 event_id: "some event".to_string().try_into().unwrap(),
-                worker_address: worker.to_string(),
+                verifier_address: verifier.to_string(),
             },
             &[],
         );
         assert!(res.is_ok());
 
         let res = app.execute_contract(
-            worker_contract.clone(),
+            pool_contract.clone(),
             contract_address.clone(),
             &ExecuteMsg::RecordParticipation {
                 chain_name: chain_name.clone(),
                 event_id: "some other event".to_string().try_into().unwrap(),
-                worker_address: worker.to_string(),
+                verifier_address: verifier.to_string(),
             },
             &[],
         );
@@ -276,7 +314,7 @@ mod tests {
             &ExecuteMsg::DistributeRewards {
                 pool_id: PoolId {
                     chain_name: chain_name.clone(),
-                    contract: worker_contract.clone(),
+                    contract: pool_contract.clone(),
                 },
                 epoch_count: None,
             },
@@ -284,8 +322,11 @@ mod tests {
         );
         assert!(res.is_ok());
 
-        // worker should have been sent the appropriate rewards
-        let balance = app.wrap().query_balance(worker, AXL_DENOMINATION).unwrap();
+        // verifier should have been sent the appropriate rewards
+        let balance = app
+            .wrap()
+            .query_balance(verifier, AXL_DENOMINATION)
+            .unwrap();
         assert_eq!(balance.amount, Uint128::from(150u128));
     }
 }

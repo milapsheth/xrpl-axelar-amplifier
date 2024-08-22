@@ -1,10 +1,10 @@
-use crate::contract::Contract;
-use crate::protocol::Protocol;
-use axelar_wasm_std::nonempty;
-use axelar_wasm_std::MajorityThreshold;
-use connection_router_api::ChainName;
+use axelar_wasm_std::{nonempty, MajorityThreshold};
 use cosmwasm_std::Addr;
 use cw_multi_test::{ContractWrapper, Executor};
+use router_api::ChainName;
+
+use crate::contract::Contract;
+use crate::protocol::Protocol;
 
 #[derive(Clone)]
 pub struct VotingVerifierContract {
@@ -45,6 +45,7 @@ impl VotingVerifierContract {
                     confirmation_height: 5,
                     source_chain,
                     rewards_address: protocol.rewards.contract_addr.to_string(),
+                    msg_id_format: axelar_wasm_std::msg_id::MessageIdFormat::HexTxHashAndEventIndex,
                 },
                 &[],
                 "voting_verifier",
