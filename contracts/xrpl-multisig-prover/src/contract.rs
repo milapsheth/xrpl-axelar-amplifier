@@ -1,5 +1,6 @@
 use std::{collections::HashSet, str::FromStr};
 
+use axelar_wasm_std::{flagset::FlagSet, permission_control::{self, Permission}, FnExt};
 #[cfg(not(feature = "library"))]
 use axelar_wasm_std::{MajorityThreshold, VerificationStatus};
 use router_api::{Address, ChainName, CrossChainId, Message};
@@ -13,7 +14,7 @@ use voting_verifier::events::parse_message_id;
 use multisig::{key::PublicKey, types::MultisigState};
 
 use crate::{
-    axelar_workers,
+    axelar_workers::{self, VerifierSet},
     error::ContractError,
     msg::{ExecuteMsg, InstantiateMsg, MigrateMsg, QueryMsg},
     querier::{Querier, XRPL_CHAIN_NAME},
@@ -30,49 +31,43 @@ use crate::{
 
 pub const START_MULTISIG_REPLY_ID: u64 = 1;
 
+const CONTRACT_NAME: &str = env!("CARGO_PKG_NAME");
+const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
     deps: DepsMut,
-    env: Env,
+    _env: Env,
     _info: MessageInfo,
     msg: InstantiateMsg,
-) -> Result<Response, axelar_wasm_std::ContractError> {
+) -> Result<Response, axelar_wasm_std::error::ContractError> {
+    cw2::set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
+
     let config = make_config(&deps, msg.clone())?;
     CONFIG.save(deps.storage, &config)?;
+
+    permission_control::set_admin(deps.storage, &deps.api.addr_validate(&msg.admin_address)?)?;
+    permission_control::set_governance(
+        deps.storage,
+        &deps.api.addr_validate(&msg.governance_address)?,
+    )?;
 
     NEXT_SEQUENCE_NUMBER.save(deps.storage, &msg.next_sequence_number)?;
     LAST_ASSIGNED_TICKET_NUMBER.save(deps.storage, &msg.last_assigned_ticket_number)?;
     AVAILABLE_TICKETS.save(deps.storage, &msg.available_tickets)?;
 
-    let querier = Querier::new(deps.querier, config.clone());
-    let new_verifier_set =
-        axelar_workers::get_active_verifiers(&querier, msg.signing_threshold, env.block.height)?;
-    // TODO: calculate verifier_union_set
-
-    CURRENT_VERIFIER_SET.save(deps.storage, &new_verifier_set.clone())?;
-
-    Ok(Response::new()
-        .add_message(wasm_execute(
-            config.axelar_multisig,
-            &multisig::msg::ExecuteMsg::RegisterVerifierSet {
-                verifier_set: new_verifier_set.clone().into(),
-            },
-            vec![],
-        )?)
-        .add_message(wasm_execute(
-            config.coordinator,
-            &coordinator::msg::ExecuteMsg::SetActiveVerifiers {
-                // TODO: check all_active_verifiers in multisig_prover
-                verifiers: new_verifier_set.signers.into_iter().map(|signer| signer.address.clone()).collect::<HashSet<Addr>>(),
-            },
-            vec![],
-        )?))
+    Ok(Response::default())
 }
+
+// STOP USING LAST SEQUENTIAL TX
+
+// store last verifier set tx, keep it up to date, if competing tx is confirmed, mark it as rejected
+
 
 fn make_config(
     deps: &DepsMut,
     msg: InstantiateMsg,
-) -> Result<Config, axelar_wasm_std::ContractError> {
+) -> Result<Config, axelar_wasm_std::error::ContractError> {
     let admin = deps.api.addr_validate(&msg.admin_address)?;
     let governance = deps.api.addr_validate(&msg.governance_address)?;
     let relayer = deps.api.addr_validate(&msg.relayer_address)?;
@@ -162,7 +157,7 @@ pub fn execute(
     env: Env,
     info: MessageInfo,
     msg: ExecuteMsg,
-) -> Result<Response, axelar_wasm_std::ContractError> {
+) -> Result<Response, axelar_wasm_std::error::ContractError> {
     let config = CONFIG.load(deps.storage)?;
     let querier = Querier::new(deps.querier, config.clone());
 
@@ -191,22 +186,26 @@ pub fn execute(
         }
         ExecuteMsg::UpdateVerifierSet {} => {
             require_admin(&deps, info.clone()).or_else(|_| require_governance(&deps, info))?;
-            construct_signer_list_set_proof(deps.storage, &querier, env, &config)
+            update_verifier_set(deps.storage, &querier, env)
         }
         ExecuteMsg::UpdateTxStatus {
             multisig_session_id,
             signer_public_keys,
             message_id,
             message_status,
-        } => update_tx_status(
-            deps.storage,
-            &querier,
-            &config,
-            &multisig_session_id,
-            &signer_public_keys,
-            &message_id,
-            message_status,
-        ),
+        } => {
+            let sender_role = permission_control::sender_role(deps.storage, &info.sender)?;
+            update_tx_status(
+                deps.storage,
+                &querier,
+                &config,
+                &multisig_session_id,
+                &signer_public_keys,
+                &message_id,
+                message_status,
+                sender_role,
+            )
+        }
         ExecuteMsg::TicketCreate {} => {
             construct_ticket_create_proof(deps.storage, env.contract.address, &config)
         }
@@ -270,8 +269,15 @@ fn construct_payment_proof(
         &message_id,
     )?;
 
+    let cur_verifier_set_id = match CURRENT_VERIFIER_SET.may_load(storage)? {
+        Some(verifier_set) => Into::<multisig::verifier_set::VerifierSet>::into(verifier_set).id(),
+        None => {
+            return Err(ContractError::NoVerifierSet);
+        }
+    };
+
     REPLY_MESSAGE_ID.save(storage, &message_id)?;
-    start_signing_session(storage, config, tx_hash, self_address)
+    Ok(Response::new().add_submessage(start_signing_session(storage, config, tx_hash, self_address, cur_verifier_set_id)?))
 }
 
 pub fn start_signing_session(
@@ -279,14 +285,9 @@ pub fn start_signing_session(
     config: &Config,
     tx_hash: TxHash,
     self_address: Addr,
-) -> Result<Response, ContractError> {
+    cur_verifier_set_id: String,
+) -> Result<SubMsg<cosmwasm_std::Empty>, ContractError> {
     REPLY_TX_HASH.save(storage, &tx_hash)?;
-    let cur_verifier_set_id = match CURRENT_VERIFIER_SET.may_load(storage)? {
-        Some(verifier_set) => Into::<multisig::verifier_set::VerifierSet>::into(verifier_set).id(),
-        None => {
-            return Err(ContractError::NoVerifierSet);
-        }
-    };
 
     let start_sig_msg: multisig::msg::ExecuteMsg = multisig::msg::ExecuteMsg::StartSigningSession {
         verifier_set_id: cur_verifier_set_id,
@@ -297,35 +298,134 @@ pub fn start_signing_session(
 
     let wasm_msg = wasm_execute(&config.axelar_multisig, &start_sig_msg, vec![])?;
 
-    Ok(Response::new().add_submessage(SubMsg::reply_on_success(wasm_msg, START_MULTISIG_REPLY_ID)))
+   Ok(SubMsg::reply_on_success(wasm_msg, START_MULTISIG_REPLY_ID))
 }
 
-fn construct_signer_list_set_proof(
+fn update_verifier_set(
     storage: &mut dyn Storage,
     querier: &Querier,
     env: Env,
-    config: &Config,
 ) -> Result<Response, ContractError> {
-    if !CURRENT_VERIFIER_SET.exists(storage) {
-        return Err(ContractError::VerifierSetIsNotSet);
+    let config = CONFIG.load(storage).map_err(ContractError::from)?;
+    let cur_verifier_set = CURRENT_VERIFIER_SET
+        .may_load(storage)
+        .map_err(ContractError::from)?;
+
+    match cur_verifier_set {
+        None => {
+            // if no verifier set, just store it and return
+            let new_verifier_set = axelar_workers::get_active_verifiers(querier, config.signing_threshold, env.block.height)?;
+            CURRENT_VERIFIER_SET
+                .save(storage, &new_verifier_set)
+                .map_err(ContractError::from)?;
+
+            Ok(Response::new().add_message(
+                wasm_execute(
+                    config.axelar_multisig,
+                    &multisig::msg::ExecuteMsg::RegisterVerifierSet {
+                        verifier_set: new_verifier_set.into(),
+                    },
+                    vec![],
+                )
+                .map_err(ContractError::from)?,
+            ))
+        }
+        Some(cur_verifier_set) => {
+            let new_verifier_set = next_verifier_set(storage, querier, &env, &config)?
+                .ok_or(ContractError::VerifierSetUnchanged)?;
+
+            save_next_verifier_set(storage, &new_verifier_set)?;
+
+            let verifier_union_set = all_active_verifiers(storage)?;
+            let tx_hash = xrpl_multisig::issue_signer_list_set(storage, &config, cur_verifier_set.clone())?;
+
+            Ok(Response::new()
+                .add_submessage(
+                    start_signing_session(storage, &config, tx_hash, env.contract.address, multisig::verifier_set::VerifierSet::from(cur_verifier_set).id())?
+                )
+                .add_message(
+                    wasm_execute(
+                        config.coordinator,
+                        &coordinator::msg::ExecuteMsg::SetActiveVerifiers {
+                            verifiers: verifier_union_set,
+                        },
+                        vec![],
+                    )
+                    .map_err(ContractError::from)?,
+                ))
+        }
     }
 
-    let new_verifier_set =
-        axelar_workers::get_active_verifiers(querier, config.signing_threshold, env.block.height)?;
-    let cur_verifier_set = CURRENT_VERIFIER_SET.load(storage)?;
-    if !axelar_workers::should_update_verifier_set(
-        &new_verifier_set.clone().into(),
-        &cur_verifier_set.clone().into(),
-        usize::try_from(config.verifier_set_diff_threshold).unwrap(),
-    ) {
-        return Err(ContractError::VerifierSetUnchanged);
+}
+
+fn all_active_verifiers(storage: &mut dyn Storage) -> Result<HashSet<Addr>, ContractError> {
+    let current_signers = CURRENT_VERIFIER_SET
+        .may_load(storage)?
+        .map(|verifier_set| verifier_set.signers)
+        .unwrap_or_default();
+
+    let next_signers = NEXT_VERIFIER_SET
+        .may_load(storage)?
+        .map(|verifier_set| verifier_set.signers)
+        .unwrap_or_default();
+
+    current_signers
+        .iter()
+        .chain(next_signers.iter())
+        .map(|signer| signer.address.clone())
+        .collect::<HashSet<Addr>>()
+        .then(Ok)
+}
+
+fn next_verifier_set(
+    storage: &mut dyn Storage,
+    querier: &Querier,
+    env: &Env,
+    config: &Config,
+) -> Result<Option<VerifierSet>, ContractError> {
+    // if there's already a pending verifiers set update, just return it
+    if let Some(pending_verifier_set) = NEXT_VERIFIER_SET.may_load(storage)? {
+        return Ok(Some(pending_verifier_set));
+    }
+    let cur_verifier_set = CURRENT_VERIFIER_SET.may_load(storage)?;
+    let new_verifier_set = axelar_workers::get_active_verifiers(querier, config.signing_threshold, env.block.height)?;
+
+    match cur_verifier_set {
+        Some(cur_verifier_set) => {
+            if crate::axelar_workers::should_update_verifier_set(
+                &new_verifier_set.clone().into(),
+                &cur_verifier_set.into(),
+                config.verifier_set_diff_threshold as usize,
+            ) {
+                Ok(Some(new_verifier_set))
+            } else {
+                Ok(None)
+            }
+        }
+        None => Err(ContractError::NoVerifierSet),
+    }
+}
+
+fn save_next_verifier_set(
+    storage: &mut dyn Storage,
+    new_verifier_set: &VerifierSet,
+) -> Result<(), ContractError> {
+    if different_set_in_progress(storage, new_verifier_set) {
+        return Err(ContractError::VerifierSetConfirmationInProgress);
     }
 
-    let tx_hash = xrpl_multisig::issue_signer_list_set(storage, config, cur_verifier_set)?;
+    NEXT_VERIFIER_SET.save(storage, new_verifier_set)?;
+    Ok(())
+}
 
-    NEXT_VERIFIER_SET.save(storage, &tx_hash, &new_verifier_set)?;
+// Returns true if there is a different verifier set pending for confirmation, false if there is no
+// verifier set pending or if the pending set is the same
+fn different_set_in_progress(storage: &dyn Storage, new_verifier_set: &VerifierSet) -> bool {
+    if let Ok(Some(next_verifier_set)) = NEXT_VERIFIER_SET.may_load(storage) {
+        return next_verifier_set != *new_verifier_set;
+    }
 
-    start_signing_session(storage, config, tx_hash, env.contract.address)
+    false
 }
 
 fn construct_ticket_create_proof(
@@ -340,9 +440,14 @@ fn construct_ticket_create_proof(
 
     let tx_hash = xrpl_multisig::issue_ticket_create(storage, config, ticket_count)?;
 
-    let response = start_signing_session(storage, config, tx_hash, self_address)?;
+    let cur_verifier_set_id = match CURRENT_VERIFIER_SET.may_load(storage)? {
+        Some(verifier_set) => Into::<multisig::verifier_set::VerifierSet>::into(verifier_set).id(),
+        None => {
+            return Err(ContractError::NoVerifierSet);
+        }
+    };
 
-    Ok(response)
+    Ok(Response::new().add_submessage(start_signing_session(storage, config, tx_hash, self_address, cur_verifier_set_id)?))
 }
 
 fn update_tx_status(
@@ -353,6 +458,7 @@ fn update_tx_status(
     signer_public_keys: &[PublicKey],
     message_id: &CrossChainId,
     status: VerificationStatus,
+    sender_role: FlagSet<Permission>,
 ) -> Result<Response, ContractError> {
     let unsigned_tx_hash =
         MULTISIG_SESSION_ID_TO_TX_HASH.load(storage, multisig_session_id.u64())?;
@@ -390,13 +496,13 @@ fn update_tx_status(
     let tx_blob = HexBinary::from(signed_tx.xrpl_serialize()?);
     let tx_hash: HexBinary = xrpl_multisig::compute_signed_tx_hash(tx_blob.as_slice())?.into();
 
-    if parse_message_id(message_id.clone().id, &XRPL_MESSAGE_ID_FORMAT)
-        .map_err(|_| ContractError::InvalidMessageID(message_id.id.to_string()))?
+    if parse_message_id(&message_id.clone().message_id, &XRPL_MESSAGE_ID_FORMAT)
+        .map_err(|_| ContractError::InvalidMessageID(message_id.message_id.to_string()))?
         .0
         .to_string()
         != tx_hash.to_string()
     {
-        return Err(ContractError::InvalidMessageID(message_id.id.to_string()));
+        return Err(ContractError::InvalidMessageID(message_id.message_id.to_string()));
     }
 
     let actual_status = querier.get_message_status(message)?;
@@ -404,7 +510,32 @@ fn update_tx_status(
         return Err(ContractError::InvalidMessageStatus);
     }
 
-    xrpl_multisig::update_tx_status(storage, config, unsigned_tx_hash, status.into())
+    let res = match xrpl_multisig::update_tx_status(querier, storage, unsigned_tx_hash, status.into(), sender_role)? {
+        None => Response::default(),
+        Some(confirmed_verifier_set) => {
+            Response::new()
+                .add_message(wasm_execute(
+                    config.axelar_multisig.clone(),
+                    &multisig::msg::ExecuteMsg::RegisterVerifierSet {
+                        verifier_set: confirmed_verifier_set.clone().into(),
+                    },
+                    vec![],
+                )?)
+                .add_message(wasm_execute(
+                    config.coordinator.clone(),
+                    &coordinator::msg::ExecuteMsg::SetActiveVerifiers {
+                        verifiers: confirmed_verifier_set
+                            .signers
+                            .iter()
+                            .map(|signer| signer.address.clone())
+                            .collect::<HashSet<Addr>>(),
+                    },
+                    vec![],
+                )?)
+        }
+    };
+
+    Ok(res)
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -412,12 +543,12 @@ pub fn reply(
     deps: DepsMut,
     _env: Env,
     reply: Reply,
-) -> Result<Response, axelar_wasm_std::ContractError> {
+) -> Result<Response, axelar_wasm_std::error::ContractError> {
     match reply.id {
         START_MULTISIG_REPLY_ID => reply::start_multisig_reply(deps, reply),
         _ => unreachable!("unknown reply ID"),
     }
-    .map_err(axelar_wasm_std::ContractError::from)
+    .map_err(axelar_wasm_std::error::ContractError::from)
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -457,7 +588,7 @@ pub fn migrate(
     deps: DepsMut,
     _env: Env,
     msg: MigrateMsg,
-) -> Result<Response, axelar_wasm_std::ContractError> {
+) -> Result<Response, axelar_wasm_std::error::ContractError> {
     let old_config = CONFIG.load(deps.storage)?;
     let governance = deps.api.addr_validate(&msg.governance_address)?;
     let new_config = Config {

@@ -1,18 +1,15 @@
-use axelar_wasm_std::nonempty;
+use axelar_wasm_std::{flagset::FlagSet, nonempty, permission_control::Permission, VerificationStatus};
 use router_api::CrossChainId;
-use cosmwasm_std::{wasm_execute, Addr, HexBinary, Response, Storage};
+use cosmwasm_std::{HexBinary, Storage};
 use sha2::{Digest, Sha256, Sha512};
-use std::{collections::HashSet, str::FromStr};
+use std::str::FromStr;
 
 use crate::{
-    axelar_workers::VerifierSet,
-    error::ContractError,
-    state::{
+    axelar_workers::VerifierSet, error::ContractError, querier::Querier, state::{
         Config, AVAILABLE_TICKETS, CONFIRMED_TRANSACTIONS, CURRENT_VERIFIER_SET,
         LAST_ASSIGNED_TICKET_NUMBER, LATEST_SEQUENTIAL_TX_HASH, MESSAGE_ID_TO_TICKET,
         NEXT_SEQUENCE_NUMBER, NEXT_VERIFIER_SET, TRANSACTION_INFO,
-    },
-    types::*,
+    }, types::*
 };
 
 fn issue_tx(
@@ -107,12 +104,29 @@ pub fn issue_signer_list_set(
     issue_tx(storage, XRPLUnsignedTx::SignerListSet(tx), None)
 }
 
+
+fn ensure_verifier_set_verification(
+    querier: &Querier,
+    verifier_set: &VerifierSet,
+) -> Result<(), ContractError> {
+    let status = querier.get_verifier_set_status(verifier_set)?;
+
+    if status == VerificationStatus::SucceededOnSourceChain {
+        return Ok(());
+    } else {
+        Err(ContractError::VerifierSetNotConfirmed)
+    }
+}
+
+
+// returns the new verifier set if it was affected
 pub fn update_tx_status(
+    querier: &Querier,
     storage: &mut dyn Storage,
-    config: &Config,
     unsigned_tx_hash: TxHash,
     new_status: TransactionStatus,
-) -> Result<Response, ContractError> {
+    sender_role: FlagSet<Permission>,
+) -> Result<Option<VerifierSet>, ContractError> {
     let mut tx_info = TRANSACTION_INFO.load(storage, &unsigned_tx_hash)?;
     if tx_info.status != TransactionStatus::Pending {
         return Err(ContractError::TransactionStatusAlreadyUpdated);
@@ -138,7 +152,7 @@ pub fn update_tx_status(
     TRANSACTION_INFO.save(storage, &unsigned_tx_hash, &tx_info)?;
 
     if tx_info.status != TransactionStatus::Succeeded {
-        return Ok(Response::default());
+        return Ok(None);
     }
 
     Ok(match &tx_info.unsigned_contents {
@@ -147,38 +161,33 @@ pub fn update_tx_status(
                 storage,
                 (tx_sequence_number + 1)..(tx_sequence_number + tx.ticket_count + 1)
             )?;
-            Response::default()
+            None
         }
-        XRPLUnsignedTx::SignerListSet(_tx) => {
-            let next_verifier_set = NEXT_VERIFIER_SET.load(storage, &unsigned_tx_hash)?;
-            // TODO: let verifier_union_set = all_active_verifiers(&deps)?;
+        XRPLUnsignedTx::SignerListSet(tx) => {
+            let next_verifier_set = NEXT_VERIFIER_SET
+                .may_load(storage)?
+                .ok_or(ContractError::NoVerifierSetToConfirm)?;
+
+            // sanity check
+            let signer_entries: Vec<XRPLSignerEntry> = next_verifier_set.clone()
+                .signers
+                .into_iter()
+                .map(XRPLSignerEntry::from)
+                .collect();
+            if signer_entries != tx.signer_entries || tx.signer_quorum != next_verifier_set.quorum {
+                return Err(ContractError::SignerListMismatch);
+            }
+
+            if !sender_role.contains(Permission::Governance) {
+                ensure_verifier_set_verification(querier, &next_verifier_set)?;
+            }
+
             CURRENT_VERIFIER_SET.save(storage, &next_verifier_set)?;
-            NEXT_VERIFIER_SET.remove(storage, &unsigned_tx_hash);
+            NEXT_VERIFIER_SET.remove(storage);
 
-            let verifiers: multisig::verifier_set::VerifierSet = next_verifier_set.clone().into();
-
-            Response::new()
-                .add_message(wasm_execute(
-                    config.axelar_multisig.clone(),
-                    &multisig::msg::ExecuteMsg::RegisterVerifierSet {
-                        verifier_set: next_verifier_set.clone().into(),
-                    },
-                    vec![],
-                )?)
-                .add_message(wasm_execute(
-                    config.coordinator.clone(),
-                    &coordinator::msg::ExecuteMsg::SetActiveVerifiers {
-                        // TODO: all_active_verifiers
-                        verifiers: verifiers
-                            .signers
-                            .values()
-                            .map(|signer| signer.address.clone())
-                            .collect::<HashSet<Addr>>(),
-                    },
-                    vec![],
-                )?)
+            Some(next_verifier_set)
         }
-        XRPLUnsignedTx::Payment(_) => Response::default(),
+        XRPLUnsignedTx::Payment(_) => None,
     })
 }
 
@@ -240,6 +249,7 @@ fn get_next_sequence_number(storage: &dyn Storage) -> Result<u32, ContractError>
     match load_latest_sequential_tx_info(storage)? {
         Some(latest_sequential_tx_info)
             if latest_sequential_tx_info.status == TransactionStatus::Pending =>
+            // this might still be pending but another tx with same sequence number may be confirmed!!!
         {
             Ok(latest_sequential_tx_info
                 .unsigned_contents

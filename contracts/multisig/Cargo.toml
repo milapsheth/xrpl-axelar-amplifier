@@ -1,6 +1,6 @@
 [package]
 name = "multisig"
-version = "0.4.1"
+version = "1.0.0"
 rust-version = { workspace = true }
 edition = "2021"
 description = "Multisig contract"
@@ -67,6 +67,8 @@ thiserror = { workspace = true }
 [dev-dependencies]
 curve25519-dalek = "4.1.1"
 cw-multi-test = "0.15.1"
+goldie = { workspace = true }
+hex = "0.4"
 
 [lints]
 workspace = true

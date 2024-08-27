@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use asyncutil::task::{CancellableTask, TaskError, TaskGroup};
 use block_height_monitor::BlockHeightMonitor;
-use broadcaster::confirm_tx::TxConfirmer;
 use broadcaster::Broadcaster;
 use cosmrs::proto::cosmos::auth::v1beta1::query_client::QueryClient as AuthQueryClient;
 use cosmrs::proto::cosmos::bank::v1beta1::query_client::QueryClient as BankQueryClient;
@@ -17,10 +16,8 @@ use router_api::ChainName;
 use thiserror::Error;
 use tofnd::grpc::{Multisig, MultisigClient};
 use tokio::signal::unix::{signal, SignalKind};
-use tokio::sync::mpsc;
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
-use tonic::transport::Channel;
 use tracing::info;
 use types::TMAddress;
 
@@ -96,7 +93,7 @@ async fn prepare_app(cfg: Config) -> Result<App<impl Broadcaster>, Error> {
         .auth_query_client(auth_query_client)
         .bank_query_client(bank_query_client)
         .address_prefix(PREFIX.to_string())
-        .client(service_client.clone())
+        .client(service_client)
         .signer(multisig_client.clone())
         .pub_key((tofnd_config.key_uid, pub_key))
         .config(broadcast.clone())
@@ -115,7 +112,6 @@ async fn prepare_app(cfg: Config) -> Result<App<impl Broadcaster>, Error> {
     App::new(
         tm_client,
         broadcaster,
-        service_client,
         multisig_client,
         broadcast,
         event_processor.stream_buffer_size,
@@ -150,7 +146,6 @@ where
     event_subscriber: event_sub::EventSubscriber,
     event_processor: TaskGroup<event_processor::Error>,
     broadcaster: QueuedBroadcaster<T>,
-    tx_confirmer: TxConfirmer<ServiceClient<Channel>>,
     multisig_client: MultisigClient,
     block_height_monitor: BlockHeightMonitor<tendermint_rpc::HttpClient>,
     health_check_server: health_check::Server,
@@ -165,7 +160,6 @@ where
     fn new(
         tm_client: tendermint_rpc::HttpClient,
         broadcaster: T,
-        service_client: ServiceClient<Channel>,
         multisig_client: MultisigClient,
         broadcast_cfg: broadcaster::Config,
         event_buffer_cap: usize,
@@ -177,24 +171,12 @@ where
         let (event_publisher, event_subscriber) =
             event_sub::EventPublisher::new(tm_client, event_buffer_cap);
 
-        let (tx_confirmer_sender, tx_confirmer_receiver) = mpsc::channel(1000);
-        let (tx_res_sender, tx_res_receiver) = mpsc::channel(1000);
-
         let event_processor = TaskGroup::new();
         let broadcaster = QueuedBroadcaster::new(
             broadcaster,
             broadcast_cfg.batch_gas_limit,
             broadcast_cfg.queue_cap,
             interval(broadcast_cfg.broadcast_interval),
-            tx_confirmer_sender,
-            tx_res_receiver,
-        );
-        let tx_confirmer = TxConfirmer::new(
-            service_client,
-            broadcast_cfg.tx_fetch_interval,
-            broadcast_cfg.tx_fetch_max_retries.saturating_add(1),
-            tx_confirmer_receiver,
-            tx_res_sender,
         );
 
         Self {
@@ -202,7 +184,6 @@ where
             event_subscriber,
             event_processor,
             broadcaster,
-            tx_confirmer,
             multisig_client,
             block_height_monitor,
             health_check_server,
@@ -401,7 +382,6 @@ where
             event_publisher,
             event_processor,
             broadcaster,
-            tx_confirmer,
             block_height_monitor,
             health_check_server,
             token,
@@ -445,9 +425,6 @@ where
                     .change_context(Error::EventProcessor)
             }))
             .add_task(CancellableTask::create(|_| {
-                tx_confirmer.run().change_context(Error::TxConfirmer)
-            }))
-            .add_task(CancellableTask::create(|_| {
                 broadcaster.run().change_context(Error::Broadcaster)
             }))
             .run(token)
@@ -463,8 +440,6 @@ pub enum Error {
     EventProcessor,
     #[error("broadcaster failed")]
     Broadcaster,
-    #[error("tx confirmer failed")]
-    TxConfirmer,
     #[error("tofnd failed")]
     Tofnd,
     #[error("connection failed")]

@@ -110,6 +110,21 @@ pub enum ContractError {
     #[error("no verifier set stored")]
     NoVerifierSet,
 
+    #[error("not enough verifiers")]
+    NotEnoughVerifiers,
+
+    #[error("verifier set not confirmed")]
+    VerifierSetNotConfirmed,
+
+    #[error("a verifier set confirmation already in progress")]
+    VerifierSetConfirmationInProgress,
+
+    #[error("no verifier set to confirm")]
+    NoVerifierSetToConfirm,
+
+    #[error("confirmed SignerListSet transaction does not match expected verifier set")]
+    SignerListMismatch,
+
     #[error("generic error {0}")]
     GenericError(String),
 }

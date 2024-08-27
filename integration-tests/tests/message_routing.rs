@@ -22,14 +22,12 @@ fn single_message_can_be_verified_and_routed_and_proven_and_rewards_are_distribu
     } = test_utils::setup_test_case();
 
     let msgs = vec![Message {
-        cc_id: CrossChainId {
-            chain: chain1.chain_name.clone(),
-            id: "0x88d7956fd7b6fcec846548d83bd25727f2585b4be3add21438ae9fbb34625924-3"
-                .to_string()
-                .try_into()
-                .unwrap(),
-        },
-        source_address: "0xBf12773B49()0e1Deb57039061AAcFA2A87DEaC9b9"
+        cc_id: CrossChainId::new(
+            chain1.chain_name.clone(),
+            "0x88d7956fd7b6fcec846548d83bd25727f2585b4be3add21438ae9fbb34625924-3",
+        )
+        .unwrap(),
+        source_address: "0xBf12773B490e1Deb57039061AAcFA2A87DEaC9b9"
             .to_string()
             .try_into()
             .unwrap(),
@@ -69,7 +67,7 @@ fn single_message_can_be_verified_and_routed_and_proven_and_rewards_are_distribu
 
     // check that the message can be found at the outgoing gateway
     let found_msgs =
-        test_utils::get_messages_from_gateway(&mut protocol.app, &chain2.gateway, &msg_ids);
+        test_utils::messages_from_gateway(&mut protocol.app, &chain2.gateway, &msg_ids);
     assert_eq!(found_msgs, msgs);
 
     // trigger signing and submit all necessary signatures
@@ -80,7 +78,7 @@ fn single_message_can_be_verified_and_routed_and_proven_and_rewards_are_distribu
         &verifiers,
     );
 
-    let proof = test_utils::get_proof(&mut protocol.app, &chain2.multisig_prover, &session_id);
+    let proof = test_utils::proof(&mut protocol.app, &chain2.multisig_prover, &session_id);
 
     // proof should be complete by now
     assert!(matches!(
@@ -147,8 +145,8 @@ fn xrpl_ticket_create_can_be_proven() {
         source_address: Address::try_from(xrpl_multisig_address.clone()).unwrap(),
         destination_address: Address::try_from(xrpl_multisig_address).unwrap(),
         cc_id: CrossChainId {
-            chain: xrpl.chain_name.clone(),
-            id: "9c2f220fe5ee650b3cd10b0a72af1206b3912afce8376214234354180198c5d5-0"
+            source_chain: xrpl.chain_name.clone().into(),
+            message_id: "9c2f220fe5ee650b3cd10b0a72af1206b3912afce8376214234354180198c5d5-0"
                 .to_string()
                 .try_into()
                 .unwrap(),
@@ -187,14 +185,13 @@ fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
 
     let msg = Message {
         cc_id: CrossChainId {
-            chain: source_chain.chain_name.clone(),
-            id: "0xaff42a67c474758ce97bd9b69c395c6dc6019707b400e06c30b0878a9357b2ea-3"
+            source_chain: source_chain.chain_name.clone().into(),
+            message_id: "0xaff42a67c474758ce97bd9b69c395c6dc6019707b400e06c30b0878a9357b2ea-3"
                 .to_string()
                 .try_into()
                 .unwrap(),
         },
-        // TODO: should be 0x address
-        source_address: "rhKnz85JUKcrAizwxNUDfqCvaUi9ZMhuwj"
+        source_address: "0x95181d16cfb23Bc493668C17d973F061e30F2EAF"
             .to_string()
             .try_into()
             .unwrap(),
@@ -232,7 +229,7 @@ fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
 
     // check that the message can be found at the outgoing gateway
     let found_msgs =
-        test_utils::get_messages_from_gateway(&mut protocol.app, &xrpl.gateway, &msg_ids);
+        test_utils::messages_from_gateway(&mut protocol.app, &xrpl.gateway, &msg_ids);
     assert_eq!(found_msgs, msgs);
 
     // trigger signing and submit all necessary signatures
@@ -267,8 +264,8 @@ fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
         source_address: Address::try_from(xrpl_multisig_address).unwrap(),
         destination_address: Address::try_from("raNVNWvhUQzFkDDTdEw3roXRJfMJFVJuQo".to_string()).unwrap(),
         cc_id: CrossChainId {
-            chain: xrpl.chain_name.clone(),
-            id: "c5c80adaff8703e589988f68587535d5c5cac5a7d7b99f0507aee3de40201137-0"
+            source_chain: xrpl.chain_name.clone().into(),
+            message_id: "c5c80adaff8703e589988f68587535d5c5cac5a7d7b99f0507aee3de40201137-0"
                 .to_string()
                 .try_into()
                 .unwrap(),
@@ -327,6 +324,7 @@ fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
     }
 }
 
+#[test]
 fn routing_to_incorrect_gateway_interface() {
     let test_utils::TestCase {
         mut protocol,
@@ -336,13 +334,11 @@ fn routing_to_incorrect_gateway_interface() {
     } = test_utils::setup_test_case();
 
     let msgs = [Message {
-        cc_id: CrossChainId {
-            chain: chain1.chain_name.clone(),
-            id: "0x88d7956fd7b6fcec846548d83bd25727f2585b4be3add21438ae9fbb34625924-3"
-                .to_string()
-                .try_into()
-                .unwrap(),
-        },
+        cc_id: CrossChainId::new(
+            chain1.chain_name.clone(),
+            "0x88d7956fd7b6fcec846548d83bd25727f2585b4be3add21438ae9fbb34625924-3",
+        )
+        .unwrap(),
         source_address: "0xBf12773B49()0e1Deb57039061AAcFA2A87DEaC9b9"
             .to_string()
             .try_into()

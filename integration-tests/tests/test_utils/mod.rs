@@ -15,7 +15,7 @@ use cosmwasm_std::{
     coins, Addr, Attribute, BlockInfo, Coin, Event, HexBinary, StdError, Uint128, Uint64
 };
 use cw_multi_test::{App, AppResponse, Executor};
-use integration_tests::contract::Contract;
+use integration_tests::{contract::Contract, voting_verifier_contract::VotingContract};
 use integration_tests::coordinator_contract::CoordinatorContract;
 use integration_tests::gateway_contract::GatewayContract;
 use integration_tests::multisig_contract::MultisigContract;
@@ -26,6 +26,7 @@ use integration_tests::rewards_contract::RewardsContract;
 use integration_tests::router_contract::RouterContract;
 use integration_tests::service_registry_contract::ServiceRegistryContract;
 use integration_tests::voting_verifier_contract::VotingVerifierContract;
+use integration_tests::xrpl_voting_verifier_contract::XRPLVotingVerifierContract;
 use k256::ecdsa;
 use sha3::{Digest, Keccak256};
 
@@ -45,7 +46,7 @@ pub const ETH_DENOMINATION: &str = "ueth";
 
 pub const SIGNATURE_BLOCK_EXPIRY: u64 = 100;
 
-fn get_event_attribute<'a>(
+fn find_event_attribute<'a>(
     events: &'a [Event],
     event_type: &str,
     attribute_name: &str,
@@ -74,10 +75,10 @@ pub fn verify_messages(
 
     let response = response.unwrap();
 
-    let poll_id = get_event_attribute(&response.events, "wasm-messages_poll_started", "poll_id")
+    let poll_id = find_event_attribute(&response.events, "wasm-messages_poll_started", "poll_id")
         .map(|attr| serde_json::from_str(&attr.value).unwrap())
         .expect("couldn't get poll_id");
-    let expiry = get_event_attribute(&response.events, "wasm-messages_poll_started", "expires_at")
+    let expiry = find_event_attribute(&response.events, "wasm-messages_poll_started", "expires_at")
         .map(|attr| attr.value.as_str().parse().unwrap())
         .expect("couldn't get poll expiry");
     (poll_id, expiry)
@@ -152,21 +153,20 @@ fn random_32_bytes() -> [u8; 32] {
     bytes
 }
 
-pub fn vote_success_for_all_messages(
+pub fn vote_success_for_all_messages<T: VotingContract>(
     app: &mut App,
-    voting_verifier: &VotingVerifierContract,
+    voting_verifier: &T,
     messages: &[Message],
     verifiers: &[Verifier],
     poll_id: PollId,
-) {
+)
+where T::ExMsg: serde::ser::Serialize + std::fmt::Debug,
+{
     for verifier in verifiers {
         let response = voting_verifier.execute(
             app,
             verifier.addr.clone(),
-            &voting_verifier::msg::ExecuteMsg::Vote {
-                poll_id,
-                votes: vec![Vote::SucceededOnChain; messages.len()],
-            },
+            &T::construct_vote_message(poll_id, messages.len(), Vote::SucceededOnChain),
         );
         assert!(response.is_ok());
     }
@@ -192,11 +192,13 @@ pub fn vote_true_for_verifier_set(
 }
 
 /// Ends the poll. Be sure the current block height has advanced at least to the poll expiration, else this will fail
-pub fn end_poll(app: &mut App, voting_verifier: &VotingVerifierContract, poll_id: PollId) {
+pub fn end_poll<T: VotingContract>(app: &mut App, voting_verifier: &T, poll_id: PollId)
+where T::ExMsg: serde::ser::Serialize + std::fmt::Debug,
+{
     let response = voting_verifier.execute(
         app,
         Addr::unchecked("relayer"),
-        &voting_verifier::msg::ExecuteMsg::EndPoll { poll_id },
+        &T::construct_end_poll_message(poll_id),
     );
     assert!(response.is_ok());
 }
@@ -210,17 +212,17 @@ pub fn construct_proof_and_sign(
     let response = multisig_prover.execute(
         &mut protocol.app,
         Addr::unchecked("relayer"),
-        &multisig_prover::msg::ExecuteMsg::ConstructProof {
-            message_ids: messages.iter().map(|msg| msg.cc_id.clone()).collect(),
-        },
+        &multisig_prover::msg::ExecuteMsg::ConstructProof(
+            messages.iter().map(|msg| msg.cc_id.clone()).collect(),
+        ),
     );
     assert!(response.is_ok());
 
     sign_proof(protocol, verifiers, response.unwrap())
 }
 
-pub fn get_multisig_session_id(response: AppResponse) -> Uint64 {
-    get_event_attribute(&response.events, "wasm-signing_started", "session_id")
+pub fn multisig_session_id(response: AppResponse) -> Uint64 {
+    find_event_attribute(&response.events, "wasm-signing_started", "session_id")
         .map(|attr| attr.value.as_str().try_into().unwrap())
         .expect("couldn't get session_id")
 }
@@ -230,10 +232,10 @@ pub fn sign_proof(
     verifiers: &Vec<Verifier>,
     response: AppResponse,
 ) -> Uint64 {
-    let msg_to_sign = get_event_attribute(&response.events, "wasm-signing_started", "msg")
+    let msg_to_sign = find_event_attribute(&response.events, "wasm-signing_started", "msg")
         .map(|attr| attr.value.clone())
         .expect("couldn't find message to sign");
-    let session_id = get_multisig_session_id(response);
+    let session_id = multisig_session_id(response);
 
     for verifier in verifiers {
         let signature = tofn::ecdsa::sign(
@@ -343,12 +345,12 @@ pub fn sign_xrpl_proof(
     response: AppResponse,
 ) -> Uint64 {
     let session_id: Uint64 =
-        get_event_attribute(&response.events, "wasm-signing_started", "session_id")
+        find_event_attribute(&response.events, "wasm-signing_started", "session_id")
             .map(|attr| attr.value.as_str().try_into().unwrap())
             .expect("couldn't get session_id");
 
     let unsigned_tx: HexBinary =
-        get_event_attribute(&response.events, "wasm-xrpl_signing_started", "unsigned_tx")
+        find_event_attribute(&response.events, "wasm-xrpl_signing_started", "unsigned_tx")
             .map(|attr| HexBinary::from_hex(attr.value.as_str()).unwrap())
             .expect("couldn't get unsigned_tx");
 
@@ -383,31 +385,29 @@ pub fn sign_xrpl_proof(
     session_id
 }
 
-pub fn get_messages_from_gateway(
+pub fn messages_from_gateway(
     app: &mut App,
     gateway: &GatewayContract,
     message_ids: &[CrossChainId],
 ) -> Vec<Message> {
     let query_response: Result<Vec<Message>, StdError> = gateway.query(
         app,
-        &gateway_api::msg::QueryMsg::GetOutgoingMessages {
-            message_ids: message_ids.to_owned(),
-        },
+        &gateway_api::msg::QueryMsg::OutgoingMessages(message_ids.to_owned()),
     );
     assert!(query_response.is_ok());
 
     query_response.unwrap()
 }
 
-pub fn get_proof(
+pub fn proof(
     app: &mut App,
     multisig_prover: &MultisigProverContract,
     multisig_session_id: &Uint64,
-) -> multisig_prover::msg::GetProofResponse {
-    let query_response: Result<multisig_prover::msg::GetProofResponse, StdError> = multisig_prover
+) -> multisig_prover::msg::ProofResponse {
+    let query_response: Result<multisig_prover::msg::ProofResponse, StdError> = multisig_prover
         .query(
             app,
-            &multisig_prover::msg::QueryMsg::GetProof {
+            &multisig_prover::msg::QueryMsg::Proof {
                 multisig_session_id: *multisig_session_id,
             },
         );
@@ -416,7 +416,7 @@ pub fn get_proof(
     query_response.unwrap()
 }
 
-pub fn get_verifier_set_from_prover(
+pub fn verifier_set_from_prover(
     app: &mut App,
     multisig_prover_contract: &MultisigProverContract,
 ) -> VerifierSet {
@@ -450,6 +450,7 @@ pub fn get_xrpl_proof(
             multisig_session_id: *multisig_session_id,
         },
     );
+    println!("response: {:?}", query_response);
     assert!(query_response.is_ok());
     query_response.unwrap()
 }
@@ -666,15 +667,15 @@ pub fn confirm_verifier_set(
     assert!(response.is_ok());
 }
 
-fn get_verifier_set_poll_id_and_expiry(response: AppResponse) -> (PollId, PollExpiryBlock) {
-    let poll_id = get_event_attribute(
+fn verifier_set_poll_id_and_expiry(response: AppResponse) -> (PollId, PollExpiryBlock) {
+    let poll_id = find_event_attribute(
         &response.events,
         "wasm-verifier_set_poll_started",
         "poll_id",
     )
     .map(|attr| serde_json::from_str(&attr.value).unwrap())
     .expect("couldn't get poll_id");
-    let expiry = get_event_attribute(
+    let expiry = find_event_attribute(
         &response.events,
         "wasm-verifier_set_poll_started",
         "expires_at",
@@ -706,7 +707,7 @@ pub fn create_verifier_set_poll(
     );
     assert!(response.is_ok());
 
-    get_verifier_set_poll_id_and_expiry(response.unwrap())
+    verifier_set_poll_id_and_expiry(response.unwrap())
 }
 
 pub fn verifiers_to_verifier_set(
@@ -853,7 +854,7 @@ pub struct Chain {
 #[derive(Clone)]
 pub struct XRPLChain {
     pub gateway: GatewayContract,
-    pub voting_verifier: VotingVerifierContract,
+    pub voting_verifier: XRPLVotingVerifierContract,
     pub multisig_prover: XRPLMultisigProverContract,
     pub chain_name: ChainName,
 }
@@ -865,7 +866,7 @@ pub fn setup_chain(
 ) -> Chain {
     let voting_verifier = VotingVerifierContract::instantiate_contract(
         protocol,
-        "doesn't matter".to_string().try_into().unwrap(),
+        "doesn't matter".try_into().unwrap(),
         Threshold::try_from((3, 4)).unwrap().try_into().unwrap(),
         chain_name.clone(),
     );
@@ -992,7 +993,7 @@ pub fn register_xrpl_token(
 pub fn setup_xrpl(protocol: &mut Protocol, verifiers: &[Verifier]) -> XRPLChain {
     let chain_name = ChainName::from_str("XRPL").unwrap();
 
-    let voting_verifier = VotingVerifierContract::instantiate_contract(
+    let voting_verifier = XRPLVotingVerifierContract::instantiate_contract(
         protocol,
         "doesn't matter".to_string().try_into().unwrap(),
         Threshold::try_from((9, 10)).unwrap().try_into().unwrap(),
@@ -1043,6 +1044,13 @@ pub fn setup_xrpl(protocol: &mut Protocol, verifiers: &[Verifier]) -> XRPLChain 
         },
         18u8,
     );
+
+    let response = multisig_prover.execute(
+        &mut protocol.app,
+        multisig_prover_admin,
+        &xrpl_multisig_prover::msg::ExecuteMsg::UpdateVerifierSet,
+    );
+    assert!(response.is_ok());
 
     let response = protocol.multisig.execute(
         &mut protocol.app,
@@ -1153,7 +1161,7 @@ pub fn rotate_active_verifier_set(
 
     let session_id = sign_proof(protocol, previous_verifiers, response.unwrap());
 
-    let proof = get_proof(&mut protocol.app, &chain.multisig_prover, &session_id);
+    let proof = proof(&mut protocol.app, &chain.multisig_prover, &session_id);
     assert!(matches!(
         proof.status,
         multisig_prover::msg::ProofStatus::Completed { .. }
@@ -1196,10 +1204,10 @@ pub struct TestCase {
 
 // Creates an instance of Axelar Amplifier with an initial verifier set registered, and returns a TestCase instance.
 pub fn setup_test_case() -> TestCase {
-    let mut protocol = setup_protocol("validators".to_string().try_into().unwrap());
+    let mut protocol = setup_protocol("validators".try_into().unwrap());
     let chains = vec![
-        "Ethereum".to_string().try_into().unwrap(),
-        "Polygon".to_string().try_into().unwrap(),
+        "Ethereum".try_into().unwrap(),
+        "Polygon".try_into().unwrap(),
     ];
     let verifiers = create_new_verifiers_vec(
         chains.clone(),
@@ -1229,18 +1237,10 @@ pub fn setup_xrpl_destination_test_case() -> (Protocol, Chain, XRPLChain, Vec<Ve
         "Ethereum".to_string().try_into().unwrap(),
         "XRPL".to_string().try_into().unwrap(),
     ];
-    let verifiers = vec![
-        Verifier {
-            addr: Addr::unchecked("verifier1"),
-            supported_chains: chains.clone(),
-            key_pair: generate_key(0),
-        },
-        Verifier {
-            addr: Addr::unchecked("verifier2"),
-            supported_chains: chains.clone(),
-            key_pair: generate_key(1),
-        },
-    ];
+    let verifiers = create_new_verifiers_vec(
+        chains.clone(),
+        vec![("verifier1".to_string(), 0), ("verifier2".to_string(), 1)],
+    );
     let min_verifier_bond = Uint128::new(100);
     let unbonding_period_days = 10;
     register_service(&mut protocol, min_verifier_bond, unbonding_period_days);
@@ -1252,8 +1252,8 @@ pub fn setup_xrpl_destination_test_case() -> (Protocol, Chain, XRPLChain, Vec<Ve
 }
 
 pub fn assert_contract_err_strings_equal(
-    actual: impl Into<axelar_wasm_std::ContractError>,
-    expected: impl Into<axelar_wasm_std::ContractError>,
+    actual: impl Into<axelar_wasm_std::error::ContractError>,
+    expected: impl Into<axelar_wasm_std::error::ContractError>,
 ) {
     assert_eq!(actual.into().to_string(), expected.into().to_string());
 }

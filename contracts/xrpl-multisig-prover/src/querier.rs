@@ -9,7 +9,7 @@ use multisig::{key::PublicKey, multisig::Multisig};
 
 use crate::{error::ContractError, state::Config};
 
-use service_registry::state::WeightedVerifier;
+use service_registry::state::{Service, WeightedVerifier};
 
 pub const XRPL_CHAIN_NAME: &str = "XRPL";
 
@@ -40,11 +40,21 @@ impl<'a> Querier<'a> {
         Self { querier, config }
     }
 
+    pub fn get_service(&self) -> Result<Service, ContractError> {
+        query(
+            self.querier,
+            self.config.service_registry.to_string(),
+            &service_registry::msg::QueryMsg::Service {
+                service_name: self.config.service_name.clone(),
+            },
+        )
+    }
+
     pub fn get_active_verifiers(&self) -> Result<Vec<WeightedVerifier>, ContractError> {
         query(
             self.querier,
             self.config.service_registry.to_string(),
-            &service_registry::msg::QueryMsg::GetActiveVerifiers {
+            &service_registry::msg::QueryMsg::ActiveVerifiers {
                 service_name: self.config.service_name.clone(),
                 chain_name: ChainName::from_str(XRPL_CHAIN_NAME).unwrap(),
             },
@@ -55,7 +65,7 @@ impl<'a> Querier<'a> {
         query(
             self.querier,
             self.config.axelar_multisig.to_string(),
-            &multisig::msg::QueryMsg::GetPublicKey {
+            &multisig::msg::QueryMsg::PublicKey {
                 verifier_address,
                 key_type: self.config.key_type,
             },
@@ -66,14 +76,14 @@ impl<'a> Querier<'a> {
         let messages: Vec<Message> = query(
             self.querier,
             self.config.gateway.to_string(),
-            &gateway_api::msg::QueryMsg::GetOutgoingMessages {
-                message_ids: vec![message_id.clone()],
-            },
+            &gateway_api::msg::QueryMsg::OutgoingMessages(
+                vec![message_id.clone()],
+            ),
         )?;
         messages
             .first()
             .cloned()
-            .ok_or(ContractError::InvalidMessageID(message_id.id.to_string()))
+            .ok_or(ContractError::InvalidMessageID(message_id.message_id.to_string()))
     }
 
     pub fn get_message_status(
@@ -83,9 +93,9 @@ impl<'a> Querier<'a> {
         let statuses: Vec<(CrossChainId, VerificationStatus)> = query(
             self.querier,
             self.config.voting_verifier.to_string(),
-            &voting_verifier::msg::QueryMsg::GetMessagesStatus {
-                messages: vec![message],
-            },
+            &voting_verifier::msg::QueryMsg::MessagesStatus(
+                vec![message],
+            ),
         )?;
         let status = statuses.first().ok_or(ContractError::GenericError(
             "failed fetching message status".to_owned(),
@@ -97,12 +107,24 @@ impl<'a> Querier<'a> {
         &self,
         multisig_session_id: &Uint64,
     ) -> Result<Multisig, ContractError> {
-        let query_msg = multisig::msg::QueryMsg::GetMultisig {
+        let query_msg = multisig::msg::QueryMsg::Multisig {
             session_id: *multisig_session_id,
         };
         query(
             self.querier,
             self.config.axelar_multisig.to_string(),
+            &query_msg,
+        )
+    }
+
+    pub fn get_verifier_set_status(
+        &self,
+        verifier_set: &crate::axelar_workers::VerifierSet,
+    ) -> Result<VerificationStatus, ContractError> {
+        let query_msg = voting_verifier::msg::QueryMsg::VerifierSetStatus(verifier_set.clone().into());
+        query(
+            self.querier,
+            self.config.voting_verifier.to_string(),
             &query_msg,
         )
     }

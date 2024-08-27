@@ -33,7 +33,7 @@ pub const REPLY_TX_HASH: Item<TxHash> = Item::new("reply_tx_hash");
 pub const REPLY_MESSAGE_ID: Item<CrossChainId> = Item::new("reply_message_id");
 pub const MULTISIG_SESSION_ID_TO_TX_HASH: Map<u64, TxHash> = Map::new("multisig_session_tx");
 
-// The next seq. no. is determined on TicketCreate and depends on the number of created tickets,
+// The next seq. no. is affected by the number of tickets created,
 // not solely on the last sequence number used.
 // On the contrary, the next ticket number to be used cannot be determined before proof construction,
 // as it depends on the tickets available at the time.
@@ -53,4 +53,4 @@ pub const LATEST_SEQUENTIAL_TX_HASH: Item<TxHash> = Item::new("latest_sequential
 pub const TOKENS: Map<&String, (XRPLToken, u8)> = Map::new("tokens");
 
 pub const CURRENT_VERIFIER_SET: Item<VerifierSet> = Item::new("current_verifier_set");
-pub const NEXT_VERIFIER_SET: Map<&TxHash, VerifierSet> = Map::new("next_verifier_set");
+pub const NEXT_VERIFIER_SET: Item<VerifierSet> = Item::new("next_verifier_set");

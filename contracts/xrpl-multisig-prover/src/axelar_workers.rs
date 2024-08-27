@@ -101,7 +101,6 @@ fn convert_or_scale_weights(weights: &[Uint128]) -> Result<Vec<u16>, ContractErr
     }
 }
 
-// TODO: refactor
 pub fn get_active_verifiers(
     querier: &Querier,
     signing_threshold: MajorityThreshold,
@@ -109,27 +108,36 @@ pub fn get_active_verifiers(
 ) -> Result<VerifierSet, ContractError> {
     let verifiers: Vec<WeightedVerifier> = querier.get_active_verifiers()?;
 
-    let participants: Vec<Participant> = verifiers
+    let verifiers_with_pubkeys = verifiers
         .into_iter()
-        .map(Participant::try_from)
-        .filter_map(|result| result.ok())
-        .collect();
+        .filter_map(|verifier| {
+            let address = verifier.verifier_info.address.clone();
+            querier.get_public_key(address.to_string())
+            .ok()
+            .map(|pk| (verifier, pk))
+        })
+        .collect::<Vec<_>>();
+
+    let min_num_verifiers = querier.get_service()?.min_num_verifiers;
+    if verifiers_with_pubkeys.len() < min_num_verifiers.try_into().unwrap() {
+        return Err(ContractError::NotEnoughVerifiers);
+    }
 
     let weights = convert_or_scale_weights(
-        participants
+        verifiers_with_pubkeys
+            .clone()
             .iter()
-            .map(|participant| Uint128::from(participant.weight))
+            .map(|(verifier, _)| Uint128::from(verifier.weight))
             .collect::<Vec<Uint128>>()
             .as_slice(),
     )?;
 
     let mut signers: Vec<AxelarSigner> = vec![];
-    for (i, participant) in participants.iter().enumerate() {
-        let pub_key: PublicKey = querier.get_public_key(participant.address.to_string())?;
+    for (i, (verifier, pub_key)) in verifiers_with_pubkeys.iter().enumerate() {
         signers.push(AxelarSigner {
-            address: participant.address.clone(),
+            address: verifier.verifier_info.address.clone(),
             weight: weights[i],
-            pub_key,
+            pub_key: pub_key.clone(),
         });
     }
 

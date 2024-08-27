@@ -11,7 +11,8 @@ use cosmwasm_std::{HexBinary, Uint64};
 use ecdsa::VerifyingKey;
 use error_stack::{Report, ResultExt};
 use events::Error::EventTypeMismatch;
-use events_derive::{self, try_from};
+use events_derive;
+use events_derive::try_from;
 use hex::encode;
 use multisig::msg::ExecuteMsg;
 use serde::de::Error as DeserializeError;
@@ -312,7 +313,7 @@ mod test {
         .unwrap()
     }
 
-    fn get_handler(
+    fn handler(
         verifier: TMAddress,
         multisig: TMAddress,
         signer: MockMultisig,
@@ -387,7 +388,7 @@ mod test {
     async fn should_not_handle_event_with_missing_fields_if_multisig_address_does_not_match() {
         let client = MockMultisig::default();
 
-        let handler = get_handler(
+        let handler = handler(
             rand_account(),
             TMAddress::from(MULTISIG_ADDRESS.parse::<AccountId>().unwrap()),
             client,
@@ -409,7 +410,7 @@ mod test {
     async fn should_error_on_event_with_missing_fields_if_multisig_address_does_match() {
         let client = MockMultisig::default();
 
-        let handler = get_handler(
+        let handler = handler(
             rand_account(),
             TMAddress::from(MULTISIG_ADDRESS.parse::<AccountId>().unwrap()),
             client,
@@ -426,7 +427,7 @@ mod test {
     async fn should_not_handle_event_if_multisig_address_does_not_match() {
         let client = MockMultisig::default();
 
-        let handler = get_handler(rand_account(), rand_account(), client, 100u64);
+        let handler = handler(rand_account(), rand_account(), client, 100u64);
 
         assert_eq!(
             handler.handle(&signing_started_event()).await.unwrap(),
@@ -441,7 +442,7 @@ mod test {
             .expect_sign()
             .returning(move |_, _, _, _| Err(Report::from(tofnd::error::Error::SignFailed)));
 
-        let handler = get_handler(
+        let handler = handler(
             rand_account(),
             TMAddress::from(MULTISIG_ADDRESS.parse::<AccountId>().unwrap()),
             client,
@@ -464,7 +465,7 @@ mod test {
         let event = signing_started_event();
         let signing_started: SigningStartedEvent = ((&event).try_into() as Result<_, _>).unwrap();
         let verifier = signing_started.pub_keys.keys().next().unwrap().clone();
-        let handler = get_handler(
+        let handler = handler(
             verifier,
             TMAddress::from(MULTISIG_ADDRESS.parse::<AccountId>().unwrap()),
             client,
@@ -487,7 +488,7 @@ mod test {
         let event = signing_started_event();
         let signing_started: SigningStartedEvent = ((&event).try_into() as Result<_, _>).unwrap();
         let verifier = signing_started.pub_keys.keys().next().unwrap().clone();
-        let handler = get_handler(
+        let handler = handler(
             verifier,
             TMAddress::from(MULTISIG_ADDRESS.parse::<AccountId>().unwrap()),
             client,

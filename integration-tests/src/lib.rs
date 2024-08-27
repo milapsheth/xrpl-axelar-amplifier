@@ -9,3 +9,4 @@ pub mod rewards_contract;
 pub mod router_contract;
 pub mod service_registry_contract;
 pub mod voting_verifier_contract;
+pub mod xrpl_voting_verifier_contract;

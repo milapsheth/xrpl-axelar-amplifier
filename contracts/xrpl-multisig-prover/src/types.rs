@@ -33,8 +33,8 @@ pub const XRPL_MESSAGE_ID_FORMAT: axelar_wasm_std::msg_id::MessageIdFormat = axe
 impl TryFrom<CrossChainId> for TxHash {
     type Error = ContractError;
     fn try_from(cc_id: CrossChainId) -> Result<Self, ContractError> {
-        let (tx_id, _event_index) = parse_message_id(cc_id.clone().id, &XRPL_MESSAGE_ID_FORMAT)
-            .map_err(|_e| ContractError::InvalidMessageID(cc_id.id.to_string()))?;
+        let (tx_id, _event_index) = parse_message_id(&cc_id.clone().message_id, &XRPL_MESSAGE_ID_FORMAT)
+            .map_err(|_e| ContractError::InvalidMessageID(cc_id.message_id.to_string()))?;
         Ok(Self(HexBinary::from_hex(
             tx_id.to_ascii_lowercase().as_str(),
         )?))
