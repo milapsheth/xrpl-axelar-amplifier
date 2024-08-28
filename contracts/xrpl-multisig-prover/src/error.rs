@@ -44,6 +44,9 @@ pub enum ContractError {
     #[error("invalid message status")]
     InvalidMessageStatus,
 
+    #[error("failed to fetch message status")]
+    MessageStatusNotFound,
+
     #[error("transaction has not been confirmed")]
     TransactionStatusNotConfirmed,
 

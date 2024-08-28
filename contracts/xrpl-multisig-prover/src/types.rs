@@ -290,11 +290,11 @@ pub struct XRPLSigner {
     pub signing_pub_key: PublicKey,
 }
 
-impl TryFrom<(String, multisig::msg::Signer)> for XRPLSigner {
+impl TryFrom<(multisig::key::Signature, multisig::msg::Signer)> for XRPLSigner {
     type Error = ContractError;
 
     fn try_from(
-        (signature, axelar_signer): (String, multisig::msg::Signer),
+        (signature, axelar_signer): (multisig::key::Signature, multisig::msg::Signer),
     ) -> Result<Self, ContractError> {
         let txn_signature = match axelar_signer.pub_key {
             multisig::key::PublicKey::Ecdsa(_) => {
@@ -305,8 +305,8 @@ impl TryFrom<(String, multisig::msg::Signer)> for XRPLSigner {
                     )
                     .to_vec(),
                 )
-            }
-            _ => unimplemented!("Unsupported signature type"),
+            },
+            _ => unimplemented!("Unsupported public key type"),
         };
 
         Ok(XRPLSigner {

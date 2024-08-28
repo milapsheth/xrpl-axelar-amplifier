@@ -6,6 +6,7 @@ use router_api::{ChainName, CrossChainId, Message};
 use cosmwasm_schema::serde::{de::DeserializeOwned, Serialize};
 use cosmwasm_std::{to_json_binary, QuerierWrapper, QueryRequest, Uint64, WasmQuery};
 use multisig::{key::PublicKey, multisig::Multisig};
+use voting_verifier::msg::MessageStatus;
 
 use crate::{error::ContractError, state::Config};
 
@@ -90,17 +91,15 @@ impl<'a> Querier<'a> {
         &self,
         message: Message,
     ) -> Result<VerificationStatus, ContractError> {
-        let statuses: Vec<(CrossChainId, VerificationStatus)> = query(
+        let messages_status: Vec<MessageStatus> = query(
             self.querier,
             self.config.voting_verifier.to_string(),
             &voting_verifier::msg::QueryMsg::MessagesStatus(
                 vec![message],
             ),
         )?;
-        let status = statuses.first().ok_or(ContractError::GenericError(
-            "failed fetching message status".to_owned(),
-        ))?;
-        Ok(status.1)
+        let message_status = messages_status.first().ok_or(ContractError::MessageStatusNotFound)?;
+        Ok(message_status.status)
     }
 
     pub fn get_multisig_session(

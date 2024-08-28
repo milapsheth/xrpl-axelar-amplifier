@@ -52,6 +52,7 @@ impl XRPLVotingVerifierContract {
                         .to_string()
                         .try_into()
                         .unwrap(),
+                    // TODO: use HexTxHash
                     msg_id_format: axelar_wasm_std::msg_id::MessageIdFormat::HexTxHashAndEventIndex,
                     address_format: axelar_wasm_std::address_format::AddressFormat::XRPL,
                 },

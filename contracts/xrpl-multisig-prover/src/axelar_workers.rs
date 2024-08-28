@@ -79,7 +79,7 @@ fn convert_uint128_to_u16(value: Uint128) -> Result<u16, ContractError> {
         ));
     }
     let bytes = value.to_le_bytes();
-    Ok(u16::from(bytes[0]) | u16::from(bytes[1]).checked_shl(7).unwrap()) // this unwrap is never supposed to fail
+    Ok(u16::from(bytes[0]) | u16::from(bytes[1]).checked_shl(8).unwrap()) // this unwrap is never supposed to fail
 }
 
 // Converts a Vec<Uint256> to Vec<u16>, scaling down with precision loss, if necessary.
@@ -113,8 +113,8 @@ pub fn get_active_verifiers(
         .filter_map(|verifier| {
             let address = verifier.verifier_info.address.clone();
             querier.get_public_key(address.to_string())
-            .ok()
-            .map(|pk| (verifier, pk))
+                .ok()
+                .map(|pk| (verifier, pk))
         })
         .collect::<Vec<_>>();
 
@@ -124,12 +124,11 @@ pub fn get_active_verifiers(
     }
 
     let weights = convert_or_scale_weights(
-        verifiers_with_pubkeys
+        &verifiers_with_pubkeys
             .clone()
             .iter()
             .map(|(verifier, _)| Uint128::from(verifier.weight))
             .collect::<Vec<Uint128>>()
-            .as_slice(),
     )?;
 
     let mut signers: Vec<AxelarSigner> = vec![];

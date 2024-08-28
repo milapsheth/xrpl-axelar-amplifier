@@ -50,10 +50,10 @@ fn single_message_can_be_verified_and_routed_and_proven_and_rewards_are_distribu
     let (poll_id, expiry) = test_utils::verify_messages(&mut protocol.app, &chain1.gateway, &msgs);
 
     // do voting
-    test_utils::vote_success_for_all_messages(
+    test_utils::vote_success(
         &mut protocol.app,
         &chain1.voting_verifier,
-        &msgs,
+        msgs.len(),
         &verifiers,
         poll_id,
     );
@@ -146,7 +146,7 @@ fn xrpl_ticket_create_can_be_proven() {
         destination_address: Address::try_from(xrpl_multisig_address).unwrap(),
         cc_id: CrossChainId {
             source_chain: xrpl.chain_name.clone().into(),
-            message_id: "9c2f220fe5ee650b3cd10b0a72af1206b3912afce8376214234354180198c5d5-0"
+            message_id: "0x9c2f220fe5ee650b3cd10b0a72af1206b3912afce8376214234354180198c5d5-0"
                 .to_string()
                 .try_into()
                 .unwrap(),
@@ -159,10 +159,10 @@ fn xrpl_ticket_create_can_be_proven() {
         &xrpl.gateway,
         &proof_msgs,
     );
-    test_utils::vote_success_for_all_messages(
+    test_utils::vote_success(
         &mut protocol.app,
         &xrpl.voting_verifier,
-        &proof_msgs,
+        proof_msgs.len(),
         &workers,
         poll_id,
     );
@@ -212,10 +212,10 @@ fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
         test_utils::verify_messages(&mut protocol.app, &source_chain.gateway, &msgs);
 
     // do voting
-    test_utils::vote_success_for_all_messages(
+    test_utils::vote_success(
         &mut protocol.app,
         &source_chain.voting_verifier,
-        &msgs,
+        msgs.len(),
         &workers,
         poll_id,
     );
@@ -265,7 +265,7 @@ fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
         destination_address: Address::try_from("raNVNWvhUQzFkDDTdEw3roXRJfMJFVJuQo".to_string()).unwrap(),
         cc_id: CrossChainId {
             source_chain: xrpl.chain_name.clone().into(),
-            message_id: "c5c80adaff8703e589988f68587535d5c5cac5a7d7b99f0507aee3de40201137-0"
+            message_id: "0xc5c80adaff8703e589988f68587535d5c5cac5a7d7b99f0507aee3de40201137-0"
                 .to_string()
                 .try_into()
                 .unwrap(),
@@ -278,10 +278,10 @@ fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
         &xrpl.gateway,
         &proof_msgs
     );
-    test_utils::vote_success_for_all_messages(
+    test_utils::vote_success(
         &mut protocol.app,
         &xrpl.voting_verifier,
-        &proof_msgs,
+        proof_msgs.len(),
         &workers,
         poll_id,
     );

@@ -153,11 +153,11 @@ fn random_32_bytes() -> [u8; 32] {
     bytes
 }
 
-pub fn vote_success_for_all_messages<T: VotingContract>(
+pub fn vote_success<T: VotingContract>(
     app: &mut App,
     voting_verifier: &T,
-    messages: &[Message],
-    verifiers: &[Verifier],
+    messages_len: usize,
+    verifiers: &Vec<Verifier>,
     poll_id: PollId,
 )
 where T::ExMsg: serde::ser::Serialize + std::fmt::Debug,
@@ -166,26 +166,11 @@ where T::ExMsg: serde::ser::Serialize + std::fmt::Debug,
         let response = voting_verifier.execute(
             app,
             verifier.addr.clone(),
-            &T::construct_vote_message(poll_id, messages.len(), Vote::SucceededOnChain),
-        );
-        assert!(response.is_ok());
-    }
-}
-
-pub fn vote_true_for_verifier_set(
-    app: &mut App,
-    voting_verifier: &VotingVerifierContract,
-    verifiers: &Vec<Verifier>,
-    poll_id: PollId,
-) {
-    for verifier in verifiers {
-        let response = voting_verifier.execute(
-            app,
-            verifier.addr.clone(),
-            &voting_verifier::msg::ExecuteMsg::Vote {
+            &T::construct_vote_message(
                 poll_id,
-                votes: vec![Vote::SucceededOnChain; 1],
-            },
+                messages_len,
+                Vote::SucceededOnChain,
+            ),
         );
         assert!(response.is_ok())
     }
@@ -450,7 +435,6 @@ pub fn get_xrpl_proof(
             multisig_session_id: *multisig_session_id,
         },
     );
-    println!("response: {:?}", query_response);
     assert!(query_response.is_ok());
     query_response.unwrap()
 }
@@ -473,7 +457,6 @@ pub fn xrpl_update_tx_status(
             signer_public_keys,
         },
     );
-    println!("xrpl_update_tx_status res: {:?}", response);
     assert!(response.is_ok());
 }
 
@@ -834,7 +817,7 @@ pub fn execute_verifier_set_poll(
     );
 
     // Vote for the verifier set
-    vote_true_for_verifier_set(&mut protocol.app, voting_verifier, new_verifiers, poll_id);
+    vote_success(&mut protocol.app, voting_verifier, 1, new_verifiers, poll_id);
 
     // Advance to expiration height
     advance_at_least_to_height(&mut protocol.app, expiry);
@@ -1176,9 +1159,10 @@ pub fn rotate_active_verifier_set(
         new_verifier_set.clone(),
     );
 
-    vote_true_for_verifier_set(
+    vote_success(
         &mut protocol.app,
         &chain.voting_verifier,
+        1,
         new_verifiers,
         poll_id,
     );

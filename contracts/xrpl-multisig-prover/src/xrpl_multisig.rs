@@ -1,11 +1,11 @@
-use axelar_wasm_std::{flagset::FlagSet, nonempty, permission_control::Permission, VerificationStatus};
+use axelar_wasm_std::nonempty;
 use router_api::CrossChainId;
 use cosmwasm_std::{HexBinary, Storage};
 use sha2::{Digest, Sha256, Sha512};
 use std::str::FromStr;
 
 use crate::{
-    axelar_workers::VerifierSet, error::ContractError, querier::Querier, state::{
+    axelar_workers::VerifierSet, error::ContractError, state::{
         Config, AVAILABLE_TICKETS, CONFIRMED_TRANSACTIONS, CURRENT_VERIFIER_SET,
         LAST_ASSIGNED_TICKET_NUMBER, LATEST_SEQUENTIAL_TX_HASH, MESSAGE_ID_TO_TICKET,
         NEXT_SEQUENCE_NUMBER, NEXT_VERIFIER_SET, TRANSACTION_INFO,
@@ -104,28 +104,11 @@ pub fn issue_signer_list_set(
     issue_tx(storage, XRPLUnsignedTx::SignerListSet(tx), None)
 }
 
-
-fn ensure_verifier_set_verification(
-    querier: &Querier,
-    verifier_set: &VerifierSet,
-) -> Result<(), ContractError> {
-    let status = querier.get_verifier_set_status(verifier_set)?;
-
-    if status == VerificationStatus::SucceededOnSourceChain {
-        return Ok(());
-    } else {
-        Err(ContractError::VerifierSetNotConfirmed)
-    }
-}
-
-
 // returns the new verifier set if it was affected
 pub fn update_tx_status(
-    querier: &Querier,
     storage: &mut dyn Storage,
     unsigned_tx_hash: TxHash,
     new_status: TransactionStatus,
-    sender_role: FlagSet<Permission>,
 ) -> Result<Option<VerifierSet>, ContractError> {
     let mut tx_info = TRANSACTION_INFO.load(storage, &unsigned_tx_hash)?;
     if tx_info.status != TransactionStatus::Pending {
@@ -174,12 +157,9 @@ pub fn update_tx_status(
                 .into_iter()
                 .map(XRPLSignerEntry::from)
                 .collect();
+
             if signer_entries != tx.signer_entries || tx.signer_quorum != next_verifier_set.quorum {
                 return Err(ContractError::SignerListMismatch);
-            }
-
-            if !sender_role.contains(Permission::Governance) {
-                ensure_verifier_set_verification(querier, &next_verifier_set)?;
             }
 
             CURRENT_VERIFIER_SET.save(storage, &next_verifier_set)?;

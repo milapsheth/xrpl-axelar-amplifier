@@ -69,6 +69,7 @@ pub fn get_proof(
                 .verifier_set
                 .signers
                 .into_iter()
+                .filter_map(|(signer_address, signer)| multisig_session.signatures.get(&signer_address).cloned().zip(Some(signer)))
                 .map(XRPLSigner::try_from)
                 .collect::<Result<Vec<_>, ContractError>>()?;
             let signed_tx = XRPLSignedTransaction::new(tx_info.unsigned_contents, xrpl_signers);

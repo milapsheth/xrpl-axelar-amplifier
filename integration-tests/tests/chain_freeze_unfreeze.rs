@@ -44,10 +44,10 @@ fn chain_can_be_freezed_unfreezed() {
     let (poll_id, expiry) = test_utils::verify_messages(&mut protocol.app, &chain1.gateway, &msgs);
 
     // do voting
-    test_utils::vote_success_for_all_messages(
+    test_utils::vote_success(
         &mut protocol.app,
         &chain1.voting_verifier,
-        &msgs,
+        msgs.len(),
         &verifiers,
         poll_id,
     );

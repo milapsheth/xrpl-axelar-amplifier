@@ -1,6 +1,6 @@
 use std::{collections::HashSet, str::FromStr};
 
-use axelar_wasm_std::{flagset::FlagSet, permission_control::{self, Permission}, FnExt};
+use axelar_wasm_std::{permission_control, FnExt};
 #[cfg(not(feature = "library"))]
 use axelar_wasm_std::{MajorityThreshold, VerificationStatus};
 use router_api::{Address, ChainName, CrossChainId, Message};
@@ -194,7 +194,6 @@ pub fn execute(
             message_id,
             message_status,
         } => {
-            let sender_role = permission_control::sender_role(deps.storage, &info.sender)?;
             update_tx_status(
                 deps.storage,
                 &querier,
@@ -203,7 +202,6 @@ pub fn execute(
                 &signer_public_keys,
                 &message_id,
                 message_status,
-                sender_role,
             )
         }
         ExecuteMsg::TicketCreate {} => {
@@ -337,7 +335,7 @@ fn update_verifier_set(
             save_next_verifier_set(storage, &new_verifier_set)?;
 
             let verifier_union_set = all_active_verifiers(storage)?;
-            let tx_hash = xrpl_multisig::issue_signer_list_set(storage, &config, cur_verifier_set.clone())?;
+            let tx_hash = xrpl_multisig::issue_signer_list_set(storage, &config, new_verifier_set.clone())?;
 
             Ok(Response::new()
                 .add_submessage(
@@ -458,7 +456,6 @@ fn update_tx_status(
     signer_public_keys: &[PublicKey],
     message_id: &CrossChainId,
     status: VerificationStatus,
-    sender_role: FlagSet<Permission>,
 ) -> Result<Response, ContractError> {
     let unsigned_tx_hash =
         MULTISIG_SESSION_ID_TO_TX_HASH.load(storage, multisig_session_id.u64())?;
@@ -470,6 +467,7 @@ fn update_tx_status(
         _ => config.xrpl_multisig.to_string(),
     };
 
+    // TODO: custom verify_tx_hash on XRPL voting verifier
     let message = Message {
         destination_chain: ChainName::from_str(XRPL_CHAIN_NAME).unwrap(),
         source_address: Address::from_str(&config.xrpl_multisig.to_string())
@@ -485,6 +483,7 @@ fn update_tx_status(
         .signers
         .into_iter()
         .filter(|(_, signer)| signer_public_keys.contains(&signer.pub_key))
+        .filter_map(|(signer_address, signer)| multisig_session.signatures.get(&signer_address).cloned().zip(Some(signer)))
         .map(XRPLSigner::try_from)
         .collect::<Result<Vec<_>, ContractError>>()?;
 
@@ -500,6 +499,8 @@ fn update_tx_status(
         .map_err(|_| ContractError::InvalidMessageID(message_id.message_id.to_string()))?
         .0
         .to_string()
+        .strip_prefix("0x")
+        .unwrap()
         != tx_hash.to_string()
     {
         return Err(ContractError::InvalidMessageID(message_id.message_id.to_string()));
@@ -510,7 +511,7 @@ fn update_tx_status(
         return Err(ContractError::InvalidMessageStatus);
     }
 
-    let res = match xrpl_multisig::update_tx_status(querier, storage, unsigned_tx_hash, status.into(), sender_role)? {
+    let res = match xrpl_multisig::update_tx_status(storage, unsigned_tx_hash, status.into())? {
         None => Response::default(),
         Some(confirmed_verifier_set) => {
             Response::new()

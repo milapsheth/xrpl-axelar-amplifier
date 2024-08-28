@@ -89,9 +89,10 @@ fn verifier_set_can_be_initialized_and_then_manually_updated() {
     );
 
     // do voting
-    test_utils::vote_true_for_verifier_set(
+    test_utils::vote_success(
         &mut protocol.app,
         &ethereum.voting_verifier,
+        1,
         &new_verifiers,
         poll_id,
     );
@@ -173,7 +174,7 @@ fn xrpl_verifier_set_can_be_initialized_and_then_manually_updated() {
         destination_address: Address::try_from(xrpl_multisig_address).unwrap(),
         cc_id: CrossChainId {
             source_chain: xrpl.chain_name.clone().into(),
-            message_id: "fbf428da41656ca3aef36287bfcb6d8491daa76f20c201c4a60172450ab517f9-0"
+            message_id: "0x166c19755f7dc98738709f1336992b95dae1871fd2af26bfe1b125c0250ffeef-0"
                 .to_string()
                 .try_into()
                 .unwrap(),
@@ -181,16 +182,15 @@ fn xrpl_verifier_set_can_be_initialized_and_then_manually_updated() {
         payload_hash: [0; 32],
     }];
 
-    // TODO: verify_message_statuses should be called through gateway, like verify_messages
     let (poll_id, expiry) = test_utils::verify_messages(
         &mut protocol.app,
         &xrpl.gateway,
         &proof_msgs
     );
-    test_utils::vote_success_for_all_messages(
+    test_utils::vote_success(
         &mut protocol.app,
         &xrpl.voting_verifier,
-        &proof_msgs,
+        proof_msgs.len(),
         &new_verifiers,
         poll_id,
     );
