@@ -2,7 +2,6 @@ use std::str::FromStr;
 
 use axelar_wasm_std::VerificationStatus;
 use router_api::{ChainName, CrossChainId, Message};
-#[cfg(not(feature = "library"))]
 use cosmwasm_schema::serde::{de::DeserializeOwned, Serialize};
 use cosmwasm_std::{to_json_binary, QuerierWrapper, QueryRequest, Uint64, WasmQuery};
 use multisig::{key::PublicKey, multisig::Multisig};

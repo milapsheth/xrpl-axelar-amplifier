@@ -1,9 +1,9 @@
 [package]
-name = "integration-tests"
+name = "xrpl-gateway"
 version = "1.0.0"
 rust-version = { workspace = true }
 edition = "2021"
-description = "Amplifier Integration Tests"
+description = "Gateway contract"
 
 exclude = [
     # Those files are rust-optimizer artifacts. You might want to commit them for convenience, but they should not be part of the source code publication.
@@ -13,13 +13,19 @@ exclude = [
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
-crate-type = ["rlib"]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "xrpl-gateway-schema"
+path = "src/bin/schema.rs"
 
 [features]
 # for more explicit tests, cargo test --features=backtraces
 backtraces = ["cosmwasm-std/backtraces"]
 # use library feature to disable all instantiate/execute/query exports
 library = []
+# generate golden files for the tests
+generate_golden_files = []
 
 [package.metadata.scripts]
 optimize = """docker run --rm -v "$(pwd)":/code \
@@ -30,28 +36,25 @@ optimize = """docker run --rm -v "$(pwd)":/code \
 
 [dependencies]
 axelar-wasm-std = { workspace = true }
-coordinator = { workspace = true }
+axelar-wasm-std-derive = { workspace = true }
+client = { workspace = true }
+cosmwasm-schema = { workspace = true }
 cosmwasm-std = { workspace = true }
-cw-multi-test = "0.15.1"
+cw-storage-plus = { workspace = true }
+cw2 = { workspace = true }
 error-stack = { workspace = true }
-gateway = { workspace = true }
 gateway-api = { workspace = true }
-k256 = { version = "0.13.1", features = ["ecdsa"] }
-multisig = { workspace = true }
-multisig-prover = { workspace = true }
-xrpl-multisig-prover = { workspace = true }
-rand = "0.8.5"
+itertools = { workspace = true }
 report = { workspace = true }
-rewards = { workspace = true }
-router = { workspace = true }
 router-api = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-service-registry = { workspace = true }
-sha3 = { workspace = true }
-tofn = { workspace = true }
-voting-verifier = { workspace = true }
-xrpl-voting-verifier = { workspace = true }
+thiserror = { workspace = true }
+voting-verifier = { workspace = true, features = ["library"] }
+
+[dev-dependencies]
+cw-multi-test = "0.15.1"
+rand = "0.8.5"
 
 [lints]
 workspace = true

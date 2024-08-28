@@ -3910,6 +3910,7 @@ dependencies = [
  "tofn",
  "voting-verifier",
  "xrpl-multisig-prover",
+ "xrpl-voting-verifier",
 ]
 
 [[package]]
@@ -9460,6 +9461,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "xrpl-gateway"
+version = "1.0.0"
+dependencies = [
+ "axelar-wasm-std",
+ "axelar-wasm-std-derive",
+ "client",
+ "cosmwasm-schema",
+ "cosmwasm-std",
+ "cw-multi-test",
+ "cw-storage-plus 1.2.0",
+ "cw2 1.1.2",
+ "error-stack",
+ "gateway-api",
+ "itertools 0.11.0",
+ "rand",
+ "report",
+ "router-api",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "voting-verifier",
+]
+
+[[package]]
 name = "xrpl-multisig-prover"
 version = "0.1.0"
 dependencies = [
@@ -9493,6 +9518,35 @@ dependencies = [
  "sha3",
  "thiserror",
  "voting-verifier",
+]
+
+[[package]]
+name = "xrpl-voting-verifier"
+version = "1.0.0"
+dependencies = [
+ "alloy-primitives",
+ "axelar-wasm-std",
+ "axelar-wasm-std-derive",
+ "client",
+ "cosmwasm-schema",
+ "cosmwasm-std",
+ "cw-multi-test",
+ "cw-storage-plus 1.2.0",
+ "cw2 1.1.2",
+ "error-stack",
+ "integration-tests",
+ "itertools 0.11.0",
+ "msgs-derive",
+ "multisig",
+ "rand",
+ "report",
+ "rewards",
+ "router-api",
+ "serde_json",
+ "service-registry",
+ "sha3",
+ "thiserror",
+ "xrpl-gateway",
 ]
 
 [[package]]

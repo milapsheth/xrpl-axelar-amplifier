@@ -21,9 +21,9 @@ impl XRPLVotingVerifierContract {
         source_chain: ChainName,
     ) -> Self {
         let code = ContractWrapper::new(
-            voting_verifier::contract::execute,
-            voting_verifier::contract::instantiate,
-            voting_verifier::contract::query,
+            xrpl_voting_verifier::contract::execute,
+            xrpl_voting_verifier::contract::instantiate,
+            xrpl_voting_verifier::contract::query,
         );
         let app = &mut protocol.app;
         let code_id = app.store_code(Box::new(code));
@@ -32,7 +32,7 @@ impl XRPLVotingVerifierContract {
             .instantiate_contract(
                 code_id,
                 Addr::unchecked("anyone"),
-                &voting_verifier::msg::InstantiateMsg {
+                &xrpl_voting_verifier::msg::InstantiateMsg {
                     governance_address: protocol.governance_address.to_string().try_into().unwrap(),
                     service_registry_address: protocol
                         .service_registry
@@ -52,12 +52,11 @@ impl XRPLVotingVerifierContract {
                         .to_string()
                         .try_into()
                         .unwrap(),
-                    // TODO: use HexTxHash
                     msg_id_format: axelar_wasm_std::msg_id::MessageIdFormat::HexTxHashAndEventIndex,
                     address_format: axelar_wasm_std::address_format::AddressFormat::XRPL,
                 },
                 &[],
-                "voting_verifier",
+                "xrpl_voting_verifier",
                 None,
             )
             .unwrap();
@@ -67,8 +66,8 @@ impl XRPLVotingVerifierContract {
 }
 
 impl Contract for XRPLVotingVerifierContract {
-    type QMsg = voting_verifier::msg::QueryMsg;
-    type ExMsg = voting_verifier::msg::ExecuteMsg;
+    type QMsg = xrpl_voting_verifier::msg::QueryMsg;
+    type ExMsg = xrpl_voting_verifier::msg::ExecuteMsg;
 
     fn contract_address(&self) -> Addr {
         self.contract_addr.clone()
@@ -77,13 +76,13 @@ impl Contract for XRPLVotingVerifierContract {
 
 impl VotingContract for XRPLVotingVerifierContract {
     fn construct_vote_message(poll_id: PollId, messages_len: usize, vote: Vote) -> Self::ExMsg {
-        voting_verifier::msg::ExecuteMsg::Vote {
+        xrpl_voting_verifier::msg::ExecuteMsg::Vote {
             poll_id,
             votes: vec![vote; messages_len],
         }
     }
 
     fn construct_end_poll_message(poll_id: PollId) -> Self::ExMsg {
-        voting_verifier::msg::ExecuteMsg::EndPoll { poll_id }
+        xrpl_voting_verifier::msg::ExecuteMsg::EndPoll { poll_id }
     }
 }

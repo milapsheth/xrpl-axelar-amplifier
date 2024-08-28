@@ -1,7 +1,6 @@
 use std::{collections::HashSet, str::FromStr};
 
 use axelar_wasm_std::{permission_control, FnExt};
-#[cfg(not(feature = "library"))]
 use axelar_wasm_std::{MajorityThreshold, VerificationStatus};
 use router_api::{Address, ChainName, CrossChainId, Message};
 use cosmwasm_std::{
