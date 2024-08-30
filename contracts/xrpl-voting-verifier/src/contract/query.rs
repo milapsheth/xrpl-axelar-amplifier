@@ -1,40 +1,38 @@
 use axelar_wasm_std::voting::{PollId, PollStatus, Vote};
 use axelar_wasm_std::{MajorityThreshold, VerificationStatus};
-use cosmwasm_std::Deps;
-use multisig::verifier_set::VerifierSet;
-use router_api::Message;
+use cosmwasm_std::{Deps, Storage};
 
 use crate::error::ContractError;
-use crate::msg::{MessageStatus, PollData, PollResponse};
-use crate::state::{self, poll_messages, poll_verifier_sets, Poll, PollContent, CONFIG, POLLS};
+use crate::msg::{MessageStatus, PollData, PollResponse, XRPLMessage};
+use crate::state::{self, poll_messages, Poll, PollContent, CONFIG, POLLS};
 
 pub fn voting_threshold(deps: Deps) -> Result<MajorityThreshold, ContractError> {
     Ok(CONFIG.load(deps.storage)?.voting_threshold)
 }
 
 pub fn messages_status(
-    deps: Deps,
-    messages: &[Message],
+    storage: &dyn Storage,
+    messages: &[XRPLMessage],
     cur_block_height: u64,
 ) -> Result<Vec<MessageStatus>, ContractError> {
     messages
         .iter()
         .map(|message| {
-            message_status(deps, message, cur_block_height)
+            message_status(storage, message, cur_block_height)
                 .map(|status| MessageStatus::new(message.to_owned(), status))
         })
         .collect()
 }
 
 pub fn message_status(
-    deps: Deps,
-    message: &Message,
+    storage: &dyn Storage,
+    message: &XRPLMessage,
     cur_block_height: u64,
 ) -> Result<VerificationStatus, ContractError> {
-    let loaded_poll_content = poll_messages().may_load(deps.storage, &message.hash())?;
+    let loaded_poll_content = poll_messages().may_load(storage, &message.hash())?;
 
     Ok(verification_status(
-        deps,
+        storage,
         loaded_poll_content,
         message,
         cur_block_height,
@@ -69,7 +67,7 @@ pub fn poll_response(
 }
 
 fn verification_status<T: PartialEq + std::fmt::Debug>(
-    deps: Deps,
+    storage: &dyn Storage,
     stored_poll_content: Option<PollContent<T>>,
     content: &T,
     cur_block_height: u64,
@@ -82,7 +80,7 @@ fn verification_status<T: PartialEq + std::fmt::Debug>(
             );
 
             let poll = POLLS
-                .load(deps.storage, stored.poll_id)
+                .load(storage, stored.poll_id)
                 .expect("invalid invariant: content's poll not found");
 
             let consensus = match &poll {
@@ -118,15 +116,15 @@ fn voting_completed(poll: &state::Poll, cur_block_height: u64) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use axelar_wasm_std::msg_id::HexTxHashAndEventIndex;
     use axelar_wasm_std::voting::{PollId, Tallies, Vote, WeightedPoll};
     use axelar_wasm_std::{nonempty, Participant, Snapshot, Threshold};
     use cosmwasm_std::testing::{mock_dependencies, mock_env};
     use cosmwasm_std::{Addr, Uint128, Uint64};
     use itertools::Itertools;
-    use router_api::CrossChainId;
+    use xrpl_multisig_prover::types::XRPLPaymentAmount;
 
     use super::*;
+    use crate::msg::UserMessage;
     use crate::state::PollContent;
 
     #[test]
@@ -144,12 +142,12 @@ mod tests {
             )
             .unwrap();
 
-        let msg = message(1);
+        let msg = user_message(1);
         poll_messages()
             .save(
                 deps.as_mut().storage,
                 &msg.hash(),
-                &PollContent::<Message>::new(msg.clone(), poll.poll_id, idx),
+                &PollContent::<XRPLMessage>::new(msg.clone(), poll.poll_id, idx),
             )
             .unwrap();
 
@@ -158,7 +156,7 @@ mod tests {
                 msg.clone(),
                 VerificationStatus::InProgress
             )],
-            messages_status(deps.as_ref(), &[msg], cur_block_height).unwrap()
+            messages_status(&deps.storage, &[msg], cur_block_height).unwrap()
         );
     }
 
@@ -180,12 +178,12 @@ mod tests {
             )
             .unwrap();
 
-        let msg = message(1);
+        let msg = user_message(1);
         poll_messages()
             .save(
                 deps.as_mut().storage,
                 &msg.hash(),
-                &PollContent::<Message>::new(msg.clone(), poll.poll_id, idx),
+                &PollContent::<XRPLMessage>::new(msg.clone(), poll.poll_id, idx),
             )
             .unwrap();
 
@@ -194,7 +192,7 @@ mod tests {
                 msg.clone(),
                 VerificationStatus::SucceededOnSourceChain
             )],
-            messages_status(deps.as_ref(), &[msg], cur_block_height).unwrap()
+            messages_status(&deps.storage, &[msg], cur_block_height).unwrap()
         );
     }
 
@@ -216,12 +214,12 @@ mod tests {
             )
             .unwrap();
 
-        let msg = message(1);
+        let msg = user_message(1);
         poll_messages()
             .save(
                 deps.as_mut().storage,
                 &msg.hash(),
-                &PollContent::<Message>::new(msg.clone(), poll.poll_id, idx),
+                &PollContent::<XRPLMessage>::new(msg.clone(), poll.poll_id, idx),
             )
             .unwrap();
 
@@ -230,18 +228,18 @@ mod tests {
                 msg.clone(),
                 VerificationStatus::FailedToVerify
             )],
-            messages_status(deps.as_ref(), &[msg], expires_at).unwrap()
+            messages_status(&deps.storage, &[msg], expires_at).unwrap()
         );
     }
 
     #[test]
     fn verification_status_not_verified() {
         let deps = mock_dependencies();
-        let msg = message(1);
+        let msg = user_message(1);
 
         assert_eq!(
             vec![MessageStatus::new(msg.clone(), VerificationStatus::Unknown)],
-            messages_status(deps.as_ref(), &[msg], 0).unwrap()
+            messages_status(&deps.storage, &[msg], 0).unwrap()
         );
     }
 
@@ -259,13 +257,13 @@ mod tests {
             )
             .unwrap();
 
-        let messages = (0..poll.poll_size as u32).map(message);
+        let messages = (0..poll.poll_size as u32).map(user_message);
         messages.clone().enumerate().for_each(|(idx, msg)| {
             poll_messages()
                 .save(
                     deps.as_mut().storage,
                     &msg.hash(),
-                    &PollContent::<Message>::new(msg, poll.poll_id, idx),
+                    &PollContent::<XRPLMessage>::new(msg, poll.poll_id, idx),
                 )
                 .unwrap()
         });
@@ -280,23 +278,15 @@ mod tests {
         );
     }
 
-    fn message(id: u32) -> Message {
-        Message {
-            cc_id: CrossChainId::new(
-                "source-chain",
-                HexTxHashAndEventIndex {
-                    tx_hash: [0; 32],
-                    event_index: id,
-                }
-                .to_string()
-                .as_str(),
-            )
-            .unwrap(),
+    fn user_message(id: u32) -> XRPLMessage {
+        XRPLMessage::UserMessage(UserMessage {
+            tx_id: [0; 32],
             source_address: format!("source-address{id}").parse().unwrap(),
             destination_chain: format!("destination-chain{id}").parse().unwrap(),
             destination_address: format!("destination-address{id}").parse().unwrap(),
             payload_hash: [0; 32],
-        }
+            amount: XRPLPaymentAmount::Drops(100),
+        })
     }
 
     pub fn poll(expires_at: u64) -> WeightedPoll {

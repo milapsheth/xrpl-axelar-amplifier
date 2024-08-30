@@ -9547,6 +9547,7 @@ dependencies = [
  "sha3",
  "thiserror",
  "xrpl-gateway",
+ "xrpl-multisig-prover",
 ]
 
 [[package]]

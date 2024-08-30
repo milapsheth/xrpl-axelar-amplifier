@@ -980,7 +980,6 @@ pub fn setup_xrpl(protocol: &mut Protocol, verifiers: &[Verifier]) -> XRPLChain 
         protocol,
         "doesn't matter".to_string().try_into().unwrap(),
         Threshold::try_from((9, 10)).unwrap().try_into().unwrap(),
-        chain_name.clone(),
     );
 
     let gateway= GatewayContract::instantiate_contract(

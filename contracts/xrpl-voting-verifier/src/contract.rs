@@ -36,10 +36,7 @@ pub fn instantiate(
         voting_threshold: msg.voting_threshold,
         block_expiry: msg.block_expiry,
         confirmation_height: msg.confirmation_height,
-        source_chain: msg.source_chain,
         rewards_contract: deps.api.addr_validate(&msg.rewards_address)?,
-        msg_id_format: msg.msg_id_format,
-        address_format: msg.address_format,
     };
     CONFIG.save(deps.storage, &config)?;
 
@@ -74,7 +71,7 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
             to_json_binary(&query::poll_response(deps, env.block.height, poll_id)?)
         }
         QueryMsg::MessagesStatus(messages) => {
-            to_json_binary(&query::messages_status(deps, &messages, env.block.height)?)
+            to_json_binary(&query::messages_status(deps.storage, &messages, env.block.height)?)
         }
         QueryMsg::CurrentThreshold => to_json_binary(&query::voting_threshold(deps)?),
     }
@@ -94,30 +91,23 @@ pub fn migrate(
 #[cfg(test)]
 mod test {
     use axelar_wasm_std::address_format::AddressFormat;
-    use axelar_wasm_std::msg_id::{
-        Base58SolanaTxSignatureAndEventIndex, Base58TxDigestAndEventIndex, HexTxHashAndEventIndex,
-        MessageIdFormat,
-    };
     use axelar_wasm_std::voting::Vote;
     use axelar_wasm_std::{
-        err_contains, nonempty, MajorityThreshold, Threshold, VerificationStatus,
+        MajorityThreshold, Threshold, VerificationStatus,
     };
     use cosmwasm_std::testing::{
         mock_dependencies, mock_env, mock_info, MockApi, MockQuerier, MockStorage,
     };
     use cosmwasm_std::{from_json, Addr, Empty, Fraction, OwnedDeps, Uint128, Uint64, WasmQuery};
-    use multisig::key::KeyType;
-    use multisig::test::common::{build_verifier_set, ecdsa_test_data};
-    use router_api::{ChainName, CrossChainId, Message};
+    use router_api::ChainName;
     use service_registry::state::{
         AuthorizationState, BondingState, Verifier, WeightedVerifier, VERIFIER_WEIGHT,
     };
-    use sha3::{Digest, Keccak256, Keccak512};
+    use sha3::{Digest, Keccak256};
+    use xrpl_multisig_prover::types::{XRPLAccountId, XRPLPaymentAmount};
 
     use super::*;
-    use crate::error::ContractError;
-    use crate::events::TxEventConfirmation;
-    use crate::msg::MessageStatus;
+    use crate::msg::{MessageStatus, UserMessage, XRPLHash, XRPLMessage};
 
     const SENDER: &str = "sender";
     const SERVICE_REGISTRY_ADDRESS: &str = "service_registry_address";
@@ -132,13 +122,6 @@ mod test {
 
     fn initial_voting_threshold() -> MajorityThreshold {
         Threshold::try_from((2, 3)).unwrap().try_into().unwrap()
-    }
-
-    fn assert_contract_err_strings_equal(
-        actual: impl Into<axelar_wasm_std::error::ContractError>,
-        expected: impl Into<axelar_wasm_std::error::ContractError>,
-    ) {
-        assert_eq!(actual.into().to_string(), expected.into().to_string());
     }
 
     fn verifiers(num_verifiers: usize) -> Vec<Verifier> {
@@ -156,10 +139,7 @@ mod test {
         verifiers
     }
 
-    fn setup(
-        verifiers: Vec<Verifier>,
-        msg_id_format: &MessageIdFormat,
-    ) -> OwnedDeps<MockStorage, MockApi, MockQuerier, Empty> {
+    fn setup(verifiers: Vec<Verifier>) -> OwnedDeps<MockStorage, MockApi, MockQuerier, Empty> {
         let mut deps = mock_dependencies();
 
         instantiate(
@@ -174,10 +154,7 @@ mod test {
                 voting_threshold: initial_voting_threshold(),
                 block_expiry: POLL_BLOCK_EXPIRY.try_into().unwrap(),
                 confirmation_height: 100,
-                source_chain: source_chain(),
                 rewards_address: REWARDS_ADDRESS.parse().unwrap(),
-                msg_id_format: msg_id_format.clone(),
-                address_format: AddressFormat::Eip55,
             },
         )
         .unwrap();
@@ -203,47 +180,20 @@ mod test {
         deps
     }
 
-    fn message_id(id: &str, index: u32, msg_id_format: &MessageIdFormat) -> nonempty::String {
-        match msg_id_format {
-            MessageIdFormat::HexTxHashAndEventIndex => HexTxHashAndEventIndex {
-                tx_hash: Keccak256::digest(id.as_bytes()).into(),
-                event_index: index,
-            }
-            .to_string()
-            .parse()
-            .unwrap(),
-            MessageIdFormat::Base58TxDigestAndEventIndex => Base58TxDigestAndEventIndex {
-                tx_digest: Keccak256::digest(id.as_bytes()).into(),
-                event_index: index,
-            }
-            .to_string()
-            .parse()
-            .unwrap(),
-            MessageIdFormat::Base58SolanaTxSignatureAndEventIndex => {
-                Base58SolanaTxSignatureAndEventIndex {
-                    raw_signature: Keccak512::digest(id.as_bytes()).into(),
-                    event_index: index,
-                }
-                .to_string()
-                .parse()
-                .unwrap()
-            }
-        }
+    fn message_id(id: &str) -> XRPLHash {
+        Keccak256::digest(id.as_bytes()).into()
     }
 
-    fn messages(len: u32, msg_id_format: &MessageIdFormat) -> Vec<Message> {
+    fn messages(len: u32) -> Vec<XRPLMessage> {
         (0..len)
-            .map(|i| Message {
-                cc_id: CrossChainId::new(source_chain(), message_id("id", i, msg_id_format))
-                    .unwrap(),
-                source_address: alloy_primitives::Address::random()
-                    .to_string()
-                    .try_into()
-                    .unwrap(),
+            .map(|i| XRPLMessage::UserMessage(UserMessage {
+                tx_id: message_id("id"),
+                source_address: XRPLAccountId::from_bytes([0; 20]), // TODO: random
                 destination_chain: format!("destination-chain{i}").parse().unwrap(),
                 destination_address: format!("destination-address{i}").parse().unwrap(),
                 payload_hash: [0; 32],
-            })
+                amount: XRPLPaymentAmount::Drops(u64::from(i)*1_000_000),
+            }))
             .collect()
     }
 
@@ -254,7 +204,7 @@ mod test {
         env
     }
 
-    fn msgs_statuses(messages: Vec<Message>, status: VerificationStatus) -> Vec<MessageStatus> {
+    fn msgs_statuses(messages: Vec<XRPLMessage>, status: VerificationStatus) -> Vec<MessageStatus> {
         messages
             .iter()
             .map(|message| MessageStatus::new(message.clone(), status))
@@ -262,94 +212,12 @@ mod test {
     }
 
     #[test]
-    fn should_fail_if_messages_are_not_from_same_source() {
-        let msg_id_format = MessageIdFormat::HexTxHashAndEventIndex;
-        let verifiers = verifiers(2);
-        let mut deps = setup(verifiers.clone(), &msg_id_format);
-
-        let msg = ExecuteMsg::VerifyMessages(vec![
-            Message {
-                cc_id: CrossChainId::new(source_chain(), message_id("id", 1, &msg_id_format))
-                    .unwrap(),
-                source_address: alloy_primitives::Address::random()
-                    .to_string()
-                    .parse()
-                    .unwrap(),
-                destination_chain: "destination-chain1".parse().unwrap(),
-                destination_address: "destination-address1".parse().unwrap(),
-                payload_hash: [0; 32],
-            },
-            Message {
-                cc_id: CrossChainId::new("other-chain", message_id("id", 2, &msg_id_format))
-                    .unwrap(),
-                source_address: "source-address2".parse().unwrap(),
-                destination_chain: "destination-chain2".parse().unwrap(),
-                destination_address: "destination-address2".parse().unwrap(),
-                payload_hash: [0; 32],
-            },
-        ]);
-        let err = execute(deps.as_mut(), mock_env(), mock_info(SENDER, &[]), msg).unwrap_err();
-        assert_contract_err_strings_equal(err, ContractError::SourceChainMismatch(source_chain()));
-    }
-
-    #[test]
-    fn should_fail_if_messages_have_invalid_msg_id() {
-        let msg_id_format = MessageIdFormat::HexTxHashAndEventIndex;
-        let verifiers = verifiers(2);
-        let mut deps = setup(verifiers.clone(), &msg_id_format);
-
-        let mut messages = messages(1, &MessageIdFormat::HexTxHashAndEventIndex);
-        messages[0].cc_id = CrossChainId::new(source_chain(), "foobar").unwrap();
-
-        let msg = ExecuteMsg::VerifyMessages(messages);
-
-        let err = execute(deps.as_mut(), mock_env(), mock_info(SENDER, &[]), msg).unwrap_err();
-        assert_contract_err_strings_equal(
-            err,
-            ContractError::InvalidMessageID("foobar".to_string()),
-        );
-    }
-
-    #[test]
-    fn should_fail_if_messages_have_base58_msg_id_but_contract_expects_hex() {
-        let msg_id_format = MessageIdFormat::HexTxHashAndEventIndex;
-        let verifiers = verifiers(2);
-        let mut deps = setup(verifiers.clone(), &msg_id_format);
-
-        let messages = messages(1, &MessageIdFormat::Base58TxDigestAndEventIndex);
-        let msg = ExecuteMsg::VerifyMessages(messages.clone());
-
-        let err = execute(deps.as_mut(), mock_env(), mock_info(SENDER, &[]), msg).unwrap_err();
-        assert_contract_err_strings_equal(
-            err,
-            ContractError::InvalidMessageID(messages[0].cc_id.message_id.to_string()),
-        );
-    }
-
-    #[test]
-    fn should_fail_if_messages_have_hex_msg_id_but_contract_expects_base58() {
-        let msg_id_format = MessageIdFormat::Base58TxDigestAndEventIndex;
-        let verifiers = verifiers(2);
-        let mut deps = setup(verifiers.clone(), &msg_id_format);
-
-        let messages = messages(1, &MessageIdFormat::HexTxHashAndEventIndex);
-        let msg = ExecuteMsg::VerifyMessages(messages.clone());
-
-        let err = execute(deps.as_mut(), mock_env(), mock_info(SENDER, &[]), msg).unwrap_err();
-        assert_contract_err_strings_equal(
-            err,
-            ContractError::InvalidMessageID(messages[0].cc_id.message_id.to_string()),
-        );
-    }
-
-    #[test]
     fn should_not_verify_messages_if_in_progress() {
-        let msg_id_format = MessageIdFormat::HexTxHashAndEventIndex;
         let verifiers = verifiers(2);
-        let mut deps = setup(verifiers.clone(), &msg_id_format);
+        let mut deps = setup(verifiers.clone());
         let messages_count = 5;
         let messages_in_progress = 3;
-        let messages = messages(messages_count as u32, &msg_id_format);
+        let messages = messages(messages_count as u32);
 
         execute(
             deps.as_mut(),
@@ -371,7 +239,7 @@ mod test {
         )
         .unwrap();
 
-        let actual: Vec<TxEventConfirmation> = serde_json::from_str(
+        let actual: Vec<XRPLMessage> = serde_json::from_str(
             &res.events
                 .into_iter()
                 .find(|event| event.ty == "messages_poll_started")
@@ -390,28 +258,16 @@ mod test {
         .unwrap();
 
         // messages starting after the ones already in progress
-        let expected = messages[messages_in_progress..]
-            .iter()
-            .cloned()
-            .map(|e| {
-                (
-                    e,
-                    &axelar_wasm_std::msg_id::MessageIdFormat::HexTxHashAndEventIndex,
-                )
-                    .try_into()
-                    .unwrap()
-            })
-            .collect::<Vec<_>>();
+        let expected = &messages[messages_in_progress..];
 
         assert_eq!(actual, expected);
     }
 
     #[test]
     fn should_retry_if_message_not_verified() {
-        let msg_id_format = MessageIdFormat::HexTxHashAndEventIndex;
         let verifiers = verifiers(2);
-        let mut deps = setup(verifiers.clone(), &msg_id_format);
-        let messages = messages(5, &msg_id_format);
+        let mut deps = setup(verifiers.clone());
+        let messages = messages(5);
 
         let msg = ExecuteMsg::VerifyMessages(messages.clone());
         execute(
@@ -446,7 +302,7 @@ mod test {
         )
         .unwrap();
 
-        let actual: Vec<TxEventConfirmation> = serde_json::from_str(
+        let actual: Vec<XRPLMessage> = serde_json::from_str(
             &res.events
                 .into_iter()
                 .find(|event| event.ty == "messages_poll_started")
@@ -464,28 +320,17 @@ mod test {
         )
         .unwrap();
 
-        let expected = messages
-            .into_iter()
-            .map(|e| {
-                (
-                    e,
-                    &axelar_wasm_std::msg_id::MessageIdFormat::HexTxHashAndEventIndex,
-                )
-                    .try_into()
-                    .unwrap()
-            })
-            .collect::<Vec<_>>();
+        let expected = messages;
 
         assert_eq!(actual, expected);
     }
 
     #[test]
     fn should_retry_if_status_not_final() {
-        let msg_id_format = MessageIdFormat::HexTxHashAndEventIndex;
         let verifiers = verifiers(2);
-        let mut deps = setup(verifiers.clone(), &msg_id_format);
+        let mut deps = setup(verifiers.clone());
 
-        let messages = messages(4, &msg_id_format);
+        let messages = messages(4);
 
         // 1. First verification
 
@@ -601,11 +446,10 @@ mod test {
 
     #[test]
     fn should_query_status_none_when_not_verified() {
-        let msg_id_format = MessageIdFormat::HexTxHashAndEventIndex;
         let verifiers = verifiers(2);
-        let deps = setup(verifiers.clone(), &msg_id_format);
+        let deps = setup(verifiers.clone());
 
-        let messages = messages(10, &msg_id_format);
+        let messages = messages(10);
 
         let statuses: Vec<MessageStatus> = from_json(
             query(
@@ -624,11 +468,10 @@ mod test {
 
     #[test]
     fn should_query_status_in_progress_when_no_consensus_and_poll_not_ended() {
-        let msg_id_format = MessageIdFormat::HexTxHashAndEventIndex;
         let verifiers = verifiers(2);
-        let mut deps = setup(verifiers.clone(), &msg_id_format);
+        let mut deps = setup(verifiers.clone());
 
-        let messages = messages(10, &msg_id_format);
+        let messages = messages(10);
 
         // starts verification process
         execute(
@@ -656,11 +499,10 @@ mod test {
 
     #[test]
     fn should_query_status_failed_to_verify_when_no_consensus_and_poll_expired() {
-        let msg_id_format = MessageIdFormat::HexTxHashAndEventIndex;
         let verifiers = verifiers(2);
-        let mut deps = setup(verifiers.clone(), &msg_id_format);
+        let mut deps = setup(verifiers.clone());
 
-        let messages = messages(10, &msg_id_format);
+        let messages = messages(10);
 
         // starts verification process
         execute(
@@ -697,19 +539,13 @@ mod test {
             (Vote::NotFound, VerificationStatus::NotFoundOnSourceChain),
         ]
         .iter()
-        .flat_map(|(v, s)| {
-            [
-                (v, s, MessageIdFormat::HexTxHashAndEventIndex),
-                (v, s, MessageIdFormat::Base58TxDigestAndEventIndex),
-            ]
-        })
         .collect::<Vec<_>>();
 
-        for (consensus_vote, expected_status, msg_id_format) in test_cases {
+        for (consensus_vote, expected_status) in test_cases {
             let verifiers = verifiers(2);
-            let mut deps = setup(verifiers.clone(), &msg_id_format);
+            let mut deps = setup(verifiers.clone());
 
-            let messages = messages(10, &msg_id_format);
+            let messages = messages(10);
 
             // starts verification process
             execute(
@@ -762,9 +598,8 @@ mod test {
 
     #[test]
     fn should_be_able_to_update_threshold_and_then_query_new_threshold() {
-        let msg_id_format = MessageIdFormat::HexTxHashAndEventIndex;
         let verifiers = verifiers(2);
-        let mut deps = setup(verifiers.clone(), &msg_id_format);
+        let mut deps = setup(verifiers.clone());
 
         let new_voting_threshold: MajorityThreshold = Threshold::try_from((
             initial_voting_threshold().numerator().u64() + 1,
@@ -797,10 +632,9 @@ mod test {
         let majority = (verifiers.len() as u64 * initial_threshold.numerator().u64())
             .div_ceil(initial_threshold.denominator().u64());
 
-        let msg_id_format = MessageIdFormat::HexTxHashAndEventIndex;
-        let mut deps = setup(verifiers.clone(), &msg_id_format);
+        let mut deps = setup(verifiers.clone());
 
-        let messages = messages(1, &msg_id_format);
+        let messages = messages(1);
 
         execute(
             deps.as_mut(),
@@ -882,8 +716,7 @@ mod test {
         let old_majority = (verifiers.len() as u64 * initial_threshold.numerator().u64())
             .div_ceil(initial_threshold.denominator().u64());
 
-        let msg_id_format = MessageIdFormat::HexTxHashAndEventIndex;
-        let mut deps = setup(verifiers.clone(), &msg_id_format);
+        let mut deps = setup(verifiers.clone());
 
         // increase the threshold prior to starting a poll
         let new_voting_threshold: MajorityThreshold =
@@ -902,7 +735,7 @@ mod test {
         )
         .unwrap();
 
-        let messages = messages(1, &msg_id_format);
+        let messages = messages(1);
 
         // start the poll, should just the new threshold
         execute(
@@ -964,9 +797,8 @@ mod test {
 
     #[test]
     fn should_emit_event_when_verification_succeeds() {
-        let msg_id_format = MessageIdFormat::HexTxHashAndEventIndex;
         let verifiers = verifiers(3);
-        let mut deps = setup(verifiers.clone(), &msg_id_format);
+        let mut deps = setup(verifiers.clone());
         let threshold = initial_voting_threshold();
         // this test depends on the threshold being 2/3
         assert_eq!(
@@ -974,7 +806,7 @@ mod test {
             Threshold::try_from((2, 3)).unwrap().try_into().unwrap()
         );
 
-        let messages = messages(3, &msg_id_format);
+        let messages = messages(3);
 
         // 1. First verification
 
@@ -1021,12 +853,12 @@ mod test {
             .unwrap();
 
             let verify_event =
-                |res: &Response, expected_message: Message, expected_status: VerificationStatus| {
+                |res: &Response, expected_message: XRPLMessage, expected_status: VerificationStatus| {
                     let mut iter = res.events.iter();
 
                     let event = iter.find(|event| event.ty == "quorum_reached").unwrap();
 
-                    let msg: Message = serde_json::from_str(
+                    let msg: XRPLMessage = serde_json::from_str(
                         &event
                             .attributes
                             .iter()
@@ -1073,50 +905,5 @@ mod test {
                 );
             }
         });
-    }
-
-    #[test]
-    fn should_fail_if_messages_have_invalid_source_address() {
-        let msg_id_format = MessageIdFormat::HexTxHashAndEventIndex;
-        let verifiers = verifiers(2);
-        let mut deps = setup(verifiers.clone(), &msg_id_format);
-
-        let eip55_address = alloy_primitives::Address::random().to_string();
-
-        let cases = vec![
-            eip55_address.to_lowercase(),
-            eip55_address.to_uppercase(),
-            // mix
-            eip55_address
-                .chars()
-                .enumerate()
-                .map(|(i, c)| {
-                    if i % 2 == 0 {
-                        c.to_uppercase().next().unwrap()
-                    } else {
-                        c.to_lowercase().next().unwrap()
-                    }
-                })
-                .collect::<String>(),
-        ];
-
-        for case in cases {
-            let mut messages = messages(1, &MessageIdFormat::HexTxHashAndEventIndex);
-            messages[0].source_address = case.parse().unwrap();
-            let msg = ExecuteMsg::VerifyMessages(messages);
-            let res = execute(deps.as_mut(), mock_env(), mock_info(SENDER, &[]), msg);
-            assert!(res.is_err_and(|err| err_contains!(
-                err.report,
-                ContractError,
-                ContractError::InvalidSourceAddress { .. }
-            )));
-        }
-
-        // should not fail if address is valid
-        let mut messages = messages(1, &MessageIdFormat::HexTxHashAndEventIndex);
-        messages[0].source_address = eip55_address.parse().unwrap();
-        let msg = ExecuteMsg::VerifyMessages(messages);
-        let res = execute(deps.as_mut(), mock_env(), mock_info(SENDER, &[]), msg);
-        assert!(res.is_ok());
     }
 }

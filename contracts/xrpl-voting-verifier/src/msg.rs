@@ -1,11 +1,10 @@
-use axelar_wasm_std::address_format::AddressFormat;
-use axelar_wasm_std::msg_id::MessageIdFormat;
 use axelar_wasm_std::voting::{PollId, PollStatus, Vote, WeightedPoll};
 use axelar_wasm_std::{nonempty, MajorityThreshold, VerificationStatus};
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use msgs_derive::EnsurePermissions;
-use multisig::verifier_set::VerifierSet;
-use router_api::{ChainName, Message};
+use router_api::{Address, ChainName, FIELD_DELIMITER};
+use sha3::{Keccak256, Digest};
+use xrpl_multisig_prover::types::{XRPLPaymentAmount, XRPLAccountId};
 
 #[cw_serde]
 pub struct InstantiateMsg {
@@ -25,13 +24,8 @@ pub struct InstantiateMsg {
     pub block_expiry: nonempty::Uint64,
     /// The number of blocks to wait for on the source chain before considering a transaction final
     pub confirmation_height: u64,
-    /// Name of the source chain
-    pub source_chain: ChainName,
     /// Rewards contract address on axelar.
     pub rewards_address: nonempty::String,
-    /// Format that incoming messages should use for the id field of CrossChainId
-    pub msg_id_format: MessageIdFormat,
-    pub address_format: AddressFormat,
 }
 
 #[cw_serde]
@@ -49,7 +43,7 @@ pub enum ExecuteMsg {
     // returns a vector of true/false values, indicating current verification status for each message
     // starts a poll for any not yet verified messages
     #[permission(Any)]
-    VerifyMessages(Vec<Message>),
+    VerifyMessages(Vec<XRPLMessage>),
 
     // Update the threshold used for new polls. Callable only by governance
     #[permission(Governance)]
@@ -60,8 +54,7 @@ pub enum ExecuteMsg {
 
 #[cw_serde]
 pub enum PollData {
-    Messages(Vec<Message>),
-    VerifierSet(VerifierSet),
+    Messages(Vec<XRPLMessage>),
 }
 #[cw_serde]
 pub struct PollResponse {
@@ -77,7 +70,7 @@ pub enum QueryMsg {
     Poll { poll_id: PollId },
 
     #[returns(Vec<MessageStatus>)]
-    MessagesStatus(Vec<Message>),
+    MessagesStatus(Vec<XRPLMessage>),
 
     #[returns(MajorityThreshold)]
     CurrentThreshold,
@@ -85,12 +78,77 @@ pub enum QueryMsg {
 
 #[cw_serde]
 pub struct MessageStatus {
-    pub message: Message,
+    pub message: XRPLMessage,
     pub status: VerificationStatus,
 }
 
 impl MessageStatus {
-    pub fn new(message: Message, status: VerificationStatus) -> Self {
+    pub fn new(message: XRPLMessage, status: VerificationStatus) -> Self {
         Self { message, status }
+    }
+}
+
+pub const CHAIN_NAME: &str = "xrpl"; // TODO
+
+pub struct MemoDetails {
+    pub destination_chain: ChainName,
+    pub destination_address: Address,
+    pub payload_hash: [u8; 32],
+}
+
+pub type XRPLHash = [u8; 32];
+
+#[cw_serde]
+pub enum XRPLMessage {
+    ProverMessage(XRPLHash),
+    UserMessage(UserMessage),
+}
+
+impl XRPLMessage {
+    pub fn tx_id(&self) -> [u8; 32] {
+        match self {
+            XRPLMessage::ProverMessage(tx_id) => *tx_id,
+            XRPLMessage::UserMessage(user_message) => user_message.tx_id,
+        }
+    }
+
+    pub fn hash(&self) -> [u8; 32] {
+        match self {
+            XRPLMessage::ProverMessage(tx_id) => *tx_id,
+            XRPLMessage::UserMessage(user_message) => user_message.hash(),
+        }
+    }
+}
+
+#[cw_serde]
+pub struct UserMessage {
+    pub tx_id: XRPLHash, // TODO: use TxHash from xrpl_multisig_prover
+    pub source_address: XRPLAccountId,
+    pub destination_chain: ChainName,
+    pub destination_address: Address,
+    /// for better user experience, the payload hash gets encoded into hex at the edges (input/output),
+    /// but internally, we treat it as raw bytes to enforce its format.
+    #[serde(with = "axelar_wasm_std::hex")]
+    #[schemars(with = "String")] // necessary attribute in conjunction with #[serde(with ...)]
+    pub payload_hash: [u8; 32],
+    pub amount: XRPLPaymentAmount,
+}
+
+impl UserMessage {
+    pub fn hash(&self) -> [u8; 32] {
+        let mut hasher = Keccak256::new();
+        let delimiter_bytes = &[FIELD_DELIMITER as u8]; // TODO: check if this works for XRPL too
+
+        hasher.update(self.tx_id);
+        hasher.update(delimiter_bytes);
+        hasher.update(self.source_address.to_bytes());
+        hasher.update(delimiter_bytes);
+        hasher.update(self.destination_chain.as_ref());
+        hasher.update(delimiter_bytes);
+        hasher.update(self.destination_address.as_str());
+        hasher.update(delimiter_bytes);
+        hasher.update(self.payload_hash);
+
+        hasher.finalize().into()
     }
 }

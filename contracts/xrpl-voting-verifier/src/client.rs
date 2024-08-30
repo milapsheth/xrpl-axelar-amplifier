@@ -2,9 +2,8 @@ use axelar_wasm_std::voting::{PollId, Vote};
 use axelar_wasm_std::MajorityThreshold;
 use cosmwasm_std::{Addr, WasmMsg};
 use error_stack::ResultExt;
-use router_api::Message;
 
-use crate::msg::{ExecuteMsg, MessageStatus, PollResponse, QueryMsg};
+use crate::msg::{ExecuteMsg, MessageStatus, PollResponse, QueryMsg, XRPLMessage};
 
 type Result<T> = error_stack::Result<T, Error>;
 
@@ -25,9 +24,11 @@ pub struct Client<'a> {
 }
 
 impl<'a> Client<'a> {
-    pub fn verify_messages(&self, messages: Vec<Message>) -> Option<WasmMsg> {
-        ignore_empty(messages)
-            .map(|messages| self.client.execute(&ExecuteMsg::VerifyMessages(messages)))
+    pub fn verify_messages(&self, messages: Vec<XRPLMessage>) -> Option<WasmMsg> {
+        if messages.is_empty() {
+            return None;
+        }
+        Some(self.client.execute(&ExecuteMsg::VerifyMessages(messages)))
     }
 
     pub fn vote(&self, poll_id: PollId, votes: Vec<Vote>) -> WasmMsg {
@@ -50,7 +51,7 @@ impl<'a> Client<'a> {
             .change_context_lazy(|| Error::QueryVotingVerifier(self.client.address.clone()))
     }
 
-    pub fn messages_status(&self, messages: Vec<Message>) -> Result<Vec<MessageStatus>> {
+    pub fn messages_status(&self, messages: Vec<XRPLMessage>) -> Result<Vec<MessageStatus>> {
         match messages.as_slice() {
             [] => Ok(vec![]),
             _ => self
@@ -67,28 +68,15 @@ impl<'a> Client<'a> {
     }
 }
 
-// TODO: unify across contract clients
-fn ignore_empty(msgs: Vec<Message>) -> Option<Vec<Message>> {
-    if msgs.is_empty() {
-        None
-    } else {
-        Some(msgs)
-    }
-}
-
 #[cfg(test)]
 mod test {
-    use std::collections::BTreeMap;
-
-    use axelar_wasm_std::msg_id::HexTxHashAndEventIndex;
     use axelar_wasm_std::{Threshold, VerificationStatus};
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info, MockQuerier};
-    use cosmwasm_std::{from_json, Addr, DepsMut, QuerierWrapper, Uint128, Uint64, WasmQuery};
-    use multisig::verifier_set::VerifierSet;
-    use router_api::{CrossChainId, Message};
+    use cosmwasm_std::{from_json, Addr, DepsMut, QuerierWrapper, Uint64, WasmQuery};
+    use xrpl_multisig_prover::types::XRPLPaymentAmount;
 
     use crate::contract::{instantiate, query};
-    use crate::msg::{InstantiateMsg, MessageStatus, QueryMsg};
+    use crate::msg::{InstantiateMsg, MessageStatus, QueryMsg, UserMessage, XRPLMessage};
     use crate::Client;
 
     #[test]
@@ -96,38 +84,23 @@ mod test {
         let (querier, _, addr) = setup();
         let client: Client = client::Client::new(QuerierWrapper::new(&querier), addr).into();
 
-        let msg_1 = Message {
-            cc_id: CrossChainId::new(
-                "eth",
-                HexTxHashAndEventIndex {
-                    tx_hash: [0; 32],
-                    event_index: 0,
-                }
-                .to_string()
-                .as_str(),
-            )
-            .unwrap(),
+        let msg_1 = XRPLMessage::UserMessage(UserMessage {
+            tx_id: [0; 32],
             source_address: "0x1234".parse().unwrap(),
             destination_address: "0x5678".parse().unwrap(),
             destination_chain: "eth".parse().unwrap(),
             payload_hash: [0; 32],
-        };
-        let msg_2 = Message {
-            cc_id: CrossChainId::new(
-                "eth",
-                HexTxHashAndEventIndex {
-                    tx_hash: [1; 32],
-                    event_index: 0,
-                }
-                .to_string()
-                .as_str(),
-            )
-            .unwrap(),
+            amount: XRPLPaymentAmount::Drops(100),
+        });
+
+        let msg_2 = XRPLMessage::UserMessage(UserMessage {
+            tx_id: [1; 32],
             source_address: "0x4321".parse().unwrap(),
             destination_address: "0x8765".parse().unwrap(),
             destination_chain: "eth".parse().unwrap(),
             payload_hash: [0; 32],
-        };
+            amount: XRPLPaymentAmount::Drops(200),
+        });
 
         assert!(client.messages_status(vec![]).unwrap().is_empty());
         assert_eq!(
@@ -184,10 +157,7 @@ mod test {
                 .unwrap(),
             block_expiry: 100.try_into().unwrap(),
             confirmation_height: 10,
-            source_chain: "source-chain".parse().unwrap(),
             rewards_address: "rewards".try_into().unwrap(),
-            msg_id_format: axelar_wasm_std::msg_id::MessageIdFormat::HexTxHashAndEventIndex,
-            address_format: axelar_wasm_std::address_format::AddressFormat::Eip55,
         };
 
         instantiate(deps, env, info.clone(), msg.clone()).unwrap();

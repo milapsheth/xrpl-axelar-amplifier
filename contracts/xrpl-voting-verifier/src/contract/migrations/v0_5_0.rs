@@ -1,13 +1,10 @@
 #![allow(deprecated)]
 
-use axelar_wasm_std::address_format::AddressFormat;
 use axelar_wasm_std::error::ContractError;
-use axelar_wasm_std::msg_id::MessageIdFormat;
 use axelar_wasm_std::{nonempty, permission_control, MajorityThreshold};
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{Addr, Attribute, StdResult, Storage};
 use cw_storage_plus::Item;
-use router_api::ChainName;
 
 use crate::contract::{CONTRACT_NAME, CONTRACT_VERSION};
 use crate::state;
@@ -34,17 +31,14 @@ fn migrate_config(storage: &mut dyn Storage, config: Config) -> StdResult<()> {
     let config = state::Config {
         service_registry_contract: config.service_registry_contract,
         service_name: config.service_name,
-        source_chain: config.source_chain,
         rewards_contract: config.rewards_contract,
         block_expiry: config
             .block_expiry
             .try_into()
             .unwrap_or(1.try_into().expect("1 is not zero")),
         confirmation_height: config.confirmation_height,
-        msg_id_format: config.msg_id_format,
         source_gateway_address: config.source_gateway_address,
         voting_threshold: config.voting_threshold,
-        address_format: AddressFormat::Eip55,
     };
 
     state::CONFIG.save(storage, &config)
@@ -71,10 +65,9 @@ pub struct Config {
     pub voting_threshold: MajorityThreshold,
     pub block_expiry: u64, // number of blocks after which a poll expires
     pub confirmation_height: u64,
-    pub source_chain: ChainName,
     pub rewards_contract: Addr,
-    pub msg_id_format: MessageIdFormat,
 }
+
 impl From<Config> for Vec<Attribute> {
     fn from(other: Config) -> Self {
         vec![
@@ -105,13 +98,11 @@ pub const CONFIG: Item<Config> = Item::new("config");
 
 #[cfg(test)]
 mod tests {
-    use axelar_wasm_std::msg_id::MessageIdFormat;
     use axelar_wasm_std::permission_control::Permission;
     use axelar_wasm_std::{nonempty, permission_control, MajorityThreshold, Threshold};
     use cosmwasm_schema::cw_serde;
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
     use cosmwasm_std::{Addr, Attribute, DepsMut, Empty, Env, Event, MessageInfo, Response};
-    use router_api::ChainName;
 
     use crate::contract::migrations::v0_5_0;
     use crate::contract::{migrate, CONTRACT_NAME, CONTRACT_VERSION};
@@ -184,7 +175,6 @@ mod tests {
         assert!(state::VOTES.is_empty(deps.as_ref().storage));
         assert!(state::POLLS.is_empty(deps.as_ref().storage));
         assert!(state::poll_messages().is_empty(deps.as_ref().storage));
-        assert!(state::poll_verifier_sets().is_empty(deps.as_ref().storage));
     }
 
     fn instantiate_contract(deps: DepsMut) {
@@ -202,9 +192,7 @@ mod tests {
                     .unwrap(),
                 block_expiry: 1,
                 confirmation_height: 1,
-                source_chain: "source-chain".parse().unwrap(),
                 rewards_address: "rewards".to_string(),
-                msg_id_format: MessageIdFormat::HexTxHashAndEventIndex,
             },
         )
         .unwrap();
@@ -227,9 +215,7 @@ mod tests {
             voting_threshold: msg.voting_threshold,
             block_expiry: msg.block_expiry,
             confirmation_height: msg.confirmation_height,
-            source_chain: msg.source_chain,
             rewards_contract: deps.api.addr_validate(&msg.rewards_address)?,
-            msg_id_format: msg.msg_id_format,
         };
         v0_5_0::CONFIG.save(deps.storage, &config)?;
 
@@ -256,11 +242,7 @@ mod tests {
         pub block_expiry: u64,
         /// The number of blocks to wait for on the source chain before considering a transaction final
         pub confirmation_height: u64,
-        /// Name of the source chain
-        pub source_chain: ChainName,
         /// Rewards contract address on axelar.
         pub rewards_address: String,
-        /// Format that incoming messages should use for the id field of CrossChainId
-        pub msg_id_format: MessageIdFormat,
     }
 }

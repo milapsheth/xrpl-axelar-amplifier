@@ -126,6 +126,10 @@ pub enum XRPLPaymentAmount {
 }
 
 #[cw_serde]
+pub struct XRPLMemo(pub HexBinary);
+
+
+#[cw_serde]
 pub enum XRPLSequence {
     Plain(u32),
     Ticket(u32),

@@ -11,8 +11,8 @@ use cosmwasm_std::Response;
 use cosmwasm_std::{
     from_json, to_json_binary, Addr, ContractResult, DepsMut, QuerierResult, WasmQuery,
 };
-use gateway::contract::*;
-use gateway::msg::InstantiateMsg;
+use xrpl_gateway::contract::*;
+use xrpl_gateway::msg::InstantiateMsg;
 use gateway_api::msg::{ExecuteMsg, QueryMsg};
 use itertools::Itertools;
 use rand::{thread_rng, Rng};

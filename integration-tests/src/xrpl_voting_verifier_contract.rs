@@ -2,7 +2,6 @@ use axelar_wasm_std::voting::{PollId, Vote};
 use axelar_wasm_std::{nonempty, MajorityThreshold};
 use cosmwasm_std::Addr;
 use cw_multi_test::{ContractWrapper, Executor};
-use router_api::ChainName;
 
 use crate::contract::Contract;
 use crate::protocol::Protocol;
@@ -18,7 +17,6 @@ impl XRPLVotingVerifierContract {
         protocol: &mut Protocol,
         source_gateway_address: nonempty::String,
         voting_threshold: MajorityThreshold,
-        source_chain: ChainName,
     ) -> Self {
         let code = ContractWrapper::new(
             xrpl_voting_verifier::contract::execute,
@@ -45,15 +43,12 @@ impl XRPLVotingVerifierContract {
                     voting_threshold,
                     block_expiry: 10.try_into().unwrap(),
                     confirmation_height: 5,
-                    source_chain,
                     rewards_address: protocol
                         .rewards
                         .contract_addr
                         .to_string()
                         .try_into()
                         .unwrap(),
-                    msg_id_format: axelar_wasm_std::msg_id::MessageIdFormat::HexTxHashAndEventIndex,
-                    address_format: axelar_wasm_std::address_format::AddressFormat::XRPL,
                 },
                 &[],
                 "xrpl_voting_verifier",

@@ -198,9 +198,6 @@ impl TryInto<XRPLObject> for XRPLSignerEntry {
     }
 }
 
-#[derive(Clone)]
-pub struct XRPLMemo(HexBinary);
-
 impl From<XRPLMemo> for HexBinary {
     fn from(memo: XRPLMemo) -> Self {
         memo.0

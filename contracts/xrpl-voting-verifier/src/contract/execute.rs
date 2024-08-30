@@ -1,6 +1,6 @@
 use std::collections::HashMap;
+use std::str::FromStr;
 
-use axelar_wasm_std::address_format::{validate_address, AddressFormat};
 use axelar_wasm_std::utils::TryMapExt;
 use axelar_wasm_std::voting::{PollId, PollResults, Vote, WeightedPoll};
 use axelar_wasm_std::{snapshot, MajorityThreshold, VerificationStatus};
@@ -8,18 +8,19 @@ use cosmwasm_std::{
     to_json_binary, Deps, DepsMut, Env, Event, MessageInfo, OverflowError, OverflowOperation,
     QueryRequest, Response, Storage, WasmMsg, WasmQuery,
 };
-use error_stack::{report, Report, ResultExt};
+use error_stack::Report;
 use itertools::Itertools;
-use router_api::{ChainName, Message};
+use router_api::ChainName;
 use service_registry::msg::QueryMsg;
 use service_registry::state::WeightedVerifier;
+use xrpl_multisig_prover::querier::XRPL_CHAIN_NAME;
 
 use crate::contract::query::message_status;
 use crate::error::ContractError;
 use crate::events::{
-    PollEnded, PollMetadata, PollStarted, QuorumReached, TxEventConfirmation,
-    Voted,
+    PollEnded, PollMetadata, PollStarted, QuorumReached, Voted,
 };
+use crate::msg::XRPLMessage;
 use crate::state::{
     self, poll_messages, Poll, CONFIG, POLLS, POLL_ID, VOTES,
 };
@@ -38,7 +39,7 @@ pub fn update_voting_threshold(
 pub fn verify_messages(
     deps: DepsMut,
     env: Env,
-    messages: Vec<Message>,
+    messages: Vec<XRPLMessage>,
 ) -> Result<Response, Report<ContractError>> {
     if messages.is_empty() {
         Err(ContractError::EmptyMessages)?;
@@ -47,16 +48,12 @@ pub fn verify_messages(
     let config = CONFIG.load(deps.storage).map_err(ContractError::from)?;
 
     let messages = messages.try_map(|message| {
-        validate_source_chain(message, &config.source_chain)
-            .and_then(|message| validate_source_address(message, &config.address_format))
-            .and_then(|message| {
-                message_status(deps.as_ref(), &message, env.block.height)
-                    .map(|status| (status, message))
-                    .map_err(Report::from)
-            })
+        message_status(deps.storage, &message, env.block.height)
+            .map(|status| (status, message))
+            .map_err(Report::from)
     })?;
 
-    let msgs_to_verify: Vec<Message> = messages
+    let msgs_to_verify: Vec<_> = messages
         .into_iter()
         .filter_map(|(status, message)| match status {
             VerificationStatus::NotFoundOnSourceChain
@@ -72,7 +69,7 @@ pub fn verify_messages(
         return Ok(Response::new());
     }
 
-    let snapshot = take_snapshot(deps.as_ref(), &config.source_chain)?;
+    let snapshot = take_snapshot(deps.as_ref())?;
     let participants = snapshot.participants();
     let expires_at = calculate_expiration(env.block.height, config.block_expiry.into())?;
 
@@ -83,22 +80,16 @@ pub fn verify_messages(
             .save(
                 deps.storage,
                 &message.hash(),
-                &state::PollContent::<Message>::new(message.clone(), id, idx),
+                &state::PollContent::<XRPLMessage>::new(message.clone(), id, idx),
             )
             .map_err(ContractError::from)?;
     }
 
-    let messages = msgs_to_verify
-        .into_iter()
-        .map(|msg| (msg, &config.msg_id_format).try_into())
-        .collect::<Result<Vec<TxEventConfirmation>, _>>()?;
-
     Ok(Response::new().add_event(
         PollStarted::Messages {
-            messages,
+            messages: msgs_to_verify,
             metadata: PollMetadata {
                 poll_id: id,
-                source_chain: config.source_chain,
                 source_gateway_address: config.source_gateway_address,
                 confirmation_height: config.confirmation_height,
                 expires_at,
@@ -231,7 +222,7 @@ pub fn end_poll(deps: DepsMut, env: Env, poll_id: PollId) -> Result<Response, Co
         .map(|address| WasmMsg::Execute {
             contract_addr: config.rewards_contract.to_string(),
             msg: to_json_binary(&rewards::msg::ExecuteMsg::RecordParticipation {
-                chain_name: config.source_chain.clone(),
+                chain_name: ChainName::from_str(XRPL_CHAIN_NAME).unwrap(), // TODO
                 event_id: poll_id
                     .to_string()
                     .try_into()
@@ -246,20 +237,19 @@ pub fn end_poll(deps: DepsMut, env: Env, poll_id: PollId) -> Result<Response, Co
         PollEnded {
             poll_id: poll_result.poll_id,
             results: poll_result.results.0.clone(),
-            source_chain: config.source_chain,
         }
         .into(),
     ))
 }
 
-fn take_snapshot(deps: Deps, chain: &ChainName) -> Result<snapshot::Snapshot, ContractError> {
+fn take_snapshot(deps: Deps) -> Result<snapshot::Snapshot, ContractError> {
     let config = CONFIG.load(deps.storage)?;
 
     // todo: add chain param to query after service registry updated
     // query service registry for active verifiers
     let active_verifiers_query = QueryMsg::ActiveVerifiers {
         service_name: config.service_name.to_string(),
-        chain_name: chain.clone(),
+        chain_name: ChainName::from_str(XRPL_CHAIN_NAME).unwrap(),
     };
 
     let verifiers: Vec<WeightedVerifier> =
@@ -298,27 +288,4 @@ fn calculate_expiration(block_height: u64, block_expiry: u64) -> Result<u64, Con
         .checked_add(block_expiry)
         .ok_or_else(|| OverflowError::new(OverflowOperation::Add, block_height, block_expiry))
         .map_err(ContractError::from)
-}
-
-fn validate_source_chain(
-    message: Message,
-    source_chain: &ChainName,
-) -> Result<Message, Report<ContractError>> {
-    if message.cc_id.source_chain != *source_chain {
-        Err(report!(ContractError::SourceChainMismatch(
-            source_chain.clone()
-        )))
-    } else {
-        Ok(message)
-    }
-}
-
-fn validate_source_address(
-    message: Message,
-    address_format: &AddressFormat,
-) -> Result<Message, Report<ContractError>> {
-    validate_address(&message.source_address, address_format)
-        .change_context(ContractError::InvalidSourceAddress)?;
-
-    Ok(message)
 }
