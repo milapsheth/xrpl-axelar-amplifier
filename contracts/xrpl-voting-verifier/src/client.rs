@@ -3,7 +3,8 @@ use axelar_wasm_std::MajorityThreshold;
 use cosmwasm_std::{Addr, WasmMsg};
 use error_stack::ResultExt;
 
-use crate::msg::{ExecuteMsg, MessageStatus, PollResponse, QueryMsg, XRPLMessage};
+use crate::msg::{ExecuteMsg, MessageStatus, PollResponse, QueryMsg};
+use xrpl_types::msg::*;
 
 type Result<T> = error_stack::Result<T, Error>;
 

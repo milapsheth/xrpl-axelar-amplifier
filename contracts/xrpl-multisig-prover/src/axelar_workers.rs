@@ -2,8 +2,7 @@ use itertools::Itertools;
 use std::collections::hash_map::RandomState;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use axelar_wasm_std::Participant;
-use axelar_wasm_std::{nonempty, MajorityThreshold};
+use axelar_wasm_std::MajorityThreshold;
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{Addr, Fraction, HexBinary, Uint128};
 use multisig::{
@@ -14,24 +13,7 @@ use service_registry::state::WeightedVerifier;
 
 use crate::error::ContractError;
 use crate::querier::Querier;
-
-#[cw_serde]
-#[derive(Eq, Ord, PartialOrd)]
-pub struct AxelarSigner {
-    pub address: Addr,
-    pub weight: u16,
-    pub pub_key: PublicKey,
-}
-
-impl From<AxelarSigner> for Participant {
-    fn from(signer: AxelarSigner) -> Self {
-        let weight = nonempty::Uint128::try_from(Uint128::from(u128::from(signer.weight))).unwrap();
-        Self {
-            address: signer.address,
-            weight,
-        }
-    }
-}
+use xrpl_types::types::AxelarSigner;
 
 #[cw_serde]
 pub struct VerifierSet {
@@ -79,7 +61,7 @@ fn convert_uint128_to_u16(value: Uint128) -> Result<u16, ContractError> {
         ));
     }
     let bytes = value.to_le_bytes();
-    Ok(u16::from(bytes[0]) | u16::from(bytes[1]).checked_shl(8).unwrap()) // this unwrap is never supposed to fail
+    Ok(u16::from(bytes[0]) | u16::from(bytes[1]).checked_shl(7).unwrap()) // this unwrap is never supposed to fail
 }
 
 // Converts a Vec<Uint256> to Vec<u16>, scaling down with precision loss, if necessary.
@@ -113,8 +95,8 @@ pub fn get_active_verifiers(
         .filter_map(|verifier| {
             let address = verifier.verifier_info.address.clone();
             querier.get_public_key(address.to_string())
-                .ok()
-                .map(|pk| (verifier, pk))
+            .ok()
+            .map(|pk| (verifier, pk))
         })
         .collect::<Vec<_>>();
 
@@ -124,11 +106,12 @@ pub fn get_active_verifiers(
     }
 
     let weights = convert_or_scale_weights(
-        &verifiers_with_pubkeys
+        verifiers_with_pubkeys
             .clone()
             .iter()
             .map(|(verifier, _)| Uint128::from(verifier.weight))
             .collect::<Vec<Uint128>>()
+            .as_slice(),
     )?;
 
     let mut signers: Vec<AxelarSigner> = vec![];

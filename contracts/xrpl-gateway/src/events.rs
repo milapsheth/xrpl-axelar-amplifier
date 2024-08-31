@@ -1,15 +1,17 @@
 use cosmwasm_std::{Attribute, Event};
 use router_api::Message;
+use xrpl_types::msg::XRPLMessage;
 
 pub enum GatewayEvent {
-    Verifying { msg: Message },
-    AlreadyVerified { msg: Message },
-    AlreadyRejected { msg: Message },
-    Routing { msg: Message },
-    UnfitForRouting { msg: Message },
+    Verifying { msg: XRPLMessage },
+    AlreadyVerified { msg: XRPLMessage },
+    AlreadyRejected { msg: XRPLMessage },
+    RoutingIncoming { msg: XRPLMessage },
+    UnfitForRouting { msg: XRPLMessage },
+    RoutingOutgoing { msg: Message },
 }
 
-fn make_message_event(event_name: &str, msg: Message) -> Event {
+fn make_message_event(event_name: &str, msg: XRPLMessage) -> Event {
     let attrs: Vec<Attribute> = msg.into();
 
     Event::new(event_name).add_attributes(attrs)

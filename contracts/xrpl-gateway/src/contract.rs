@@ -3,7 +3,8 @@ use std::fmt::Debug;
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{Binary, Deps, DepsMut, Empty, Env, MessageInfo, Response};
-use gateway_api::msg::{ExecuteMsg, QueryMsg};
+use xrpl_types::msg::XRPLMessage;
+use crate::msg::{ExecuteMsg, QueryMsg};
 use router_api::CrossChainId;
 
 use crate::contract::migrations::v0_2_3;
@@ -76,13 +77,15 @@ pub enum Error {
     MessageNotFound(CrossChainId),
     #[error("message with id {0} mismatches with the stored one")]
     MessageMismatch(CrossChainId),
+    #[error("router only")]
+    RouterOnly,
 }
 
 mod internal {
     use client::Client;
     use cosmwasm_std::{to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response};
     use error_stack::{Result, ResultExt};
-    use gateway_api::msg::{ExecuteMsg, QueryMsg};
+    use crate::msg::{ExecuteMsg, QueryMsg};
     use router_api::client::Router;
 
     use crate::contract::Error;
@@ -129,13 +132,13 @@ mod internal {
 
         match msg {
             ExecuteMsg::VerifyMessages(msgs) => contract::execute::verify_messages(&verifier, msgs),
-            ExecuteMsg::RouteMessages(msgs) => {
-                if info.sender == router.address {
-                    contract::execute::route_outgoing_messages(deps.storage, msgs)
-                } else {
-                    contract::execute::route_incoming_messages(&verifier, &router, msgs)
+            ExecuteMsg::RouteOutgoingMessages(msgs) => {
+                if info.sender != router.address {
+                    return Err(Error::RouterOnly)?;
                 }
-            }
+                contract::execute::route_outgoing_messages(deps.storage, msgs)
+            },
+            ExecuteMsg::RouteIncomingMessages(msgs) => contract::execute::route_incoming_messages(&verifier, &router, msgs)
         }
     }
 

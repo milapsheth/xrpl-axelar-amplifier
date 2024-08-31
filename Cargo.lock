@@ -9475,13 +9475,15 @@ dependencies = [
  "error-stack",
  "gateway-api",
  "itertools 0.11.0",
+ "msgs-derive",
  "rand",
  "report",
  "router-api",
  "serde",
  "serde_json",
  "thiserror",
- "voting-verifier",
+ "xrpl-types",
+ "xrpl-voting-verifier",
 ]
 
 [[package]]
@@ -9518,6 +9520,26 @@ dependencies = [
  "sha3",
  "thiserror",
  "voting-verifier",
+ "xrpl-types",
+]
+
+[[package]]
+name = "xrpl-types"
+version = "1.0.0"
+dependencies = [
+ "axelar-wasm-std",
+ "bs58 0.5.1",
+ "cosmwasm-schema",
+ "cosmwasm-std",
+ "cw-storage-plus 1.2.0",
+ "error-stack",
+ "k256",
+ "multisig",
+ "ripemd",
+ "router-api",
+ "sha2 0.10.8",
+ "sha3",
+ "thiserror",
 ]
 
 [[package]]
@@ -9546,8 +9568,7 @@ dependencies = [
  "service-registry",
  "sha3",
  "thiserror",
- "xrpl-gateway",
- "xrpl-multisig-prover",
+ "xrpl-types",
 ]
 
 [[package]]

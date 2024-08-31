@@ -13,17 +13,18 @@ use itertools::Itertools;
 use router_api::ChainName;
 use service_registry::msg::QueryMsg;
 use service_registry::state::WeightedVerifier;
-use xrpl_multisig_prover::querier::XRPL_CHAIN_NAME;
 
 use crate::contract::query::message_status;
 use crate::error::ContractError;
 use crate::events::{
     PollEnded, PollMetadata, PollStarted, QuorumReached, Voted,
 };
-use crate::msg::XRPLMessage;
+use xrpl_types::msg::XRPLMessage;
 use crate::state::{
     self, poll_messages, Poll, CONFIG, POLLS, POLL_ID, VOTES,
 };
+
+const XRPL_CHAIN_NAME: &str = "xrpl";
 
 pub fn update_voting_threshold(
     deps: DepsMut,

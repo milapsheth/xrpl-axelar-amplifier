@@ -11,6 +11,7 @@ use cosmwasm_std::{
 use voting_verifier::events::parse_message_id;
 
 use multisig::{key::PublicKey, types::MultisigState};
+use xrpl_types::types::*;
 
 use crate::{
     axelar_workers::{self, VerifierSet},

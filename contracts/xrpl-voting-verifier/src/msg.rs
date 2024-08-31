@@ -4,7 +4,20 @@ use cosmwasm_schema::{cw_serde, QueryResponses};
 use msgs_derive::EnsurePermissions;
 use router_api::{Address, ChainName, FIELD_DELIMITER};
 use sha3::{Keccak256, Digest};
-use xrpl_multisig_prover::types::{XRPLPaymentAmount, XRPLAccountId};
+use xrpl_types::types::*;
+use xrpl_types::msg::*;
+
+#[cw_serde]
+pub struct MessageStatus {
+    pub message: XRPLMessage,
+    pub status: VerificationStatus,
+}
+
+impl MessageStatus {
+    pub fn new(message: XRPLMessage, status: VerificationStatus) -> Self {
+        Self { message, status }
+    }
+}
 
 #[cw_serde]
 pub struct InstantiateMsg {
@@ -74,81 +87,4 @@ pub enum QueryMsg {
 
     #[returns(MajorityThreshold)]
     CurrentThreshold,
-}
-
-#[cw_serde]
-pub struct MessageStatus {
-    pub message: XRPLMessage,
-    pub status: VerificationStatus,
-}
-
-impl MessageStatus {
-    pub fn new(message: XRPLMessage, status: VerificationStatus) -> Self {
-        Self { message, status }
-    }
-}
-
-pub const CHAIN_NAME: &str = "xrpl"; // TODO
-
-pub struct MemoDetails {
-    pub destination_chain: ChainName,
-    pub destination_address: Address,
-    pub payload_hash: [u8; 32],
-}
-
-pub type XRPLHash = [u8; 32];
-
-#[cw_serde]
-pub enum XRPLMessage {
-    ProverMessage(XRPLHash),
-    UserMessage(UserMessage),
-}
-
-impl XRPLMessage {
-    pub fn tx_id(&self) -> [u8; 32] {
-        match self {
-            XRPLMessage::ProverMessage(tx_id) => *tx_id,
-            XRPLMessage::UserMessage(user_message) => user_message.tx_id,
-        }
-    }
-
-    pub fn hash(&self) -> [u8; 32] {
-        match self {
-            XRPLMessage::ProverMessage(tx_id) => *tx_id,
-            XRPLMessage::UserMessage(user_message) => user_message.hash(),
-        }
-    }
-}
-
-#[cw_serde]
-pub struct UserMessage {
-    pub tx_id: XRPLHash, // TODO: use TxHash from xrpl_multisig_prover
-    pub source_address: XRPLAccountId,
-    pub destination_chain: ChainName,
-    pub destination_address: Address,
-    /// for better user experience, the payload hash gets encoded into hex at the edges (input/output),
-    /// but internally, we treat it as raw bytes to enforce its format.
-    #[serde(with = "axelar_wasm_std::hex")]
-    #[schemars(with = "String")] // necessary attribute in conjunction with #[serde(with ...)]
-    pub payload_hash: [u8; 32],
-    pub amount: XRPLPaymentAmount,
-}
-
-impl UserMessage {
-    pub fn hash(&self) -> [u8; 32] {
-        let mut hasher = Keccak256::new();
-        let delimiter_bytes = &[FIELD_DELIMITER as u8]; // TODO: check if this works for XRPL too
-
-        hasher.update(self.tx_id);
-        hasher.update(delimiter_bytes);
-        hasher.update(self.source_address.to_bytes());
-        hasher.update(delimiter_bytes);
-        hasher.update(self.destination_chain.as_ref());
-        hasher.update(delimiter_bytes);
-        hasher.update(self.destination_address.as_str());
-        hasher.update(delimiter_bytes);
-        hasher.update(self.payload_hash);
-
-        hasher.finalize().into()
-    }
 }

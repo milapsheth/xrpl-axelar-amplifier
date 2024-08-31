@@ -3,6 +3,7 @@ use router_api::CrossChainId;
 use cosmwasm_std::{HexBinary, Storage};
 use sha2::{Digest, Sha256, Sha512};
 use std::str::FromStr;
+use xrpl_types::types::*;
 
 use crate::{
     axelar_workers::VerifierSet, error::ContractError, state::{

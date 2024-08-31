@@ -20,6 +20,7 @@ axelar-wasm-std = { version = "^1.0.0", path = "packages/axelar-wasm-std" }
 axelar-wasm-std-derive = { version = "^1.0.0", path = "packages/axelar-wasm-std-derive" }
 integration-tests = { version = "^1.0.0", path = "integration-tests" }
 itertools = "0.11.0"
+xrpl-types = { version = "^1.0.0", path = "packages/xrpl-types" }
 xrpl-multisig-prover = { version = "^0.1.0", path = "contracts/xrpl-multisig-prover" }
 xrpl-voting-verifier = { version = "^1.0.0", path = "contracts/xrpl-voting-verifier" }
 xrpl-gateway = { version = "^1.0.0", path = "contracts/xrpl-gateway" }

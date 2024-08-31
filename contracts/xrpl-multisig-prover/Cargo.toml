@@ -54,6 +54,7 @@ voting-verifier = { workspace = true, features = ["library"] }
 k256 = { version = "0.13.1", features = ["ecdsa"] }
 ascii = { version = "1.1.0", features = ["serde"] }
 itertools = "0.11.0"
+xrpl-types = { workspace = true }
 
 [dev-dependencies]
 anyhow = "1.0"

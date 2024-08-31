@@ -6,7 +6,7 @@ use cosmwasm_std::{Addr, Order, StdResult, Storage};
 use cw_storage_plus::{Index, IndexList, IndexedMap, Item, Map, MultiIndex};
 
 use crate::error::ContractError;
-use crate::msg::XRPLMessage;
+use xrpl_types::msg::XRPLMessage;
 
 #[cw_serde]
 pub struct Config {

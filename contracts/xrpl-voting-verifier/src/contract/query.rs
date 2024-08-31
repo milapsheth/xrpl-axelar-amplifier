@@ -3,7 +3,9 @@ use axelar_wasm_std::{MajorityThreshold, VerificationStatus};
 use cosmwasm_std::{Deps, Storage};
 
 use crate::error::ContractError;
-use crate::msg::{MessageStatus, PollData, PollResponse, XRPLMessage};
+use crate::msg::{MessageStatus, PollData, PollResponse};
+use xrpl_types::msg::XRPLMessage;
+
 use crate::state::{self, poll_messages, Poll, PollContent, CONFIG, POLLS};
 
 pub fn voting_threshold(deps: Deps) -> Result<MajorityThreshold, ContractError> {

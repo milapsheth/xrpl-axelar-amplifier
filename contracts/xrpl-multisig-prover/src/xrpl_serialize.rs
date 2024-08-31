@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 
 use cosmwasm_std::{HexBinary, Uint64};
 use multisig::key::PublicKey;
+use xrpl_types::types::*;
 
 use crate::{error::ContractError, types::*};
 
@@ -468,8 +469,6 @@ mod tests {
 
     use cosmwasm_std::Uint128;
     use multisig::key::PublicKey;
-
-    use crate::types::XRPLToken;
 
     use super::*;
 

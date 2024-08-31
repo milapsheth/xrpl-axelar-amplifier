@@ -11,10 +11,10 @@ use crate::{
     querier::Querier,
     state::{CURRENT_VERIFIER_SET, MULTISIG_SESSION_ID_TO_TX_HASH, TRANSACTION_INFO},
     types::TransactionStatus,
-    types::*,
     xrpl_multisig::{self, HASH_PREFIX_UNSIGNED_TX_MULTI_SIGNING},
     xrpl_serialize::XRPLSerialize,
 };
+use xrpl_types::types::*;
 
 pub fn get_message_to_sign(
     storage: &dyn Storage,

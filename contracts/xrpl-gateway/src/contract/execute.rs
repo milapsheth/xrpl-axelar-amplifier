@@ -1,18 +1,21 @@
+use std::str::FromStr;
+
 use axelar_wasm_std::{FnExt, VerificationStatus};
 use cosmwasm_std::{Event, Response, Storage, WasmMsg};
 use error_stack::{report, Result, ResultExt};
 use itertools::Itertools;
 use router_api::client::Router;
-use router_api::Message;
-use voting_verifier::msg::MessageStatus;
+use router_api::{Address, Message};
+use xrpl_voting_verifier::msg::MessageStatus;
+use xrpl_types::msg::{CrossChainMessage, XRPLMessage};
 
 use crate::contract::Error;
 use crate::events::GatewayEvent;
 use crate::state;
 
 pub fn verify_messages(
-    verifier: &voting_verifier::Client,
-    msgs: Vec<Message>,
+    verifier: &xrpl_voting_verifier::Client,
+    msgs: Vec<XRPLMessage>,
 ) -> Result<Response, Error> {
     apply(verifier, msgs, |msgs_by_status| {
         verify(verifier, msgs_by_status)
@@ -20,9 +23,9 @@ pub fn verify_messages(
 }
 
 pub(crate) fn route_incoming_messages(
-    verifier: &voting_verifier::Client,
+    verifier: &xrpl_voting_verifier::Client,
     router: &Router,
-    msgs: Vec<Message>,
+    msgs: Vec<XRPLMessage>,
 ) -> Result<Response, Error> {
     apply(verifier, msgs, |msgs_by_status| {
         route(router, msgs_by_status)
@@ -53,14 +56,14 @@ pub(crate) fn route_outgoing_messages(
 
     Ok(Response::new().add_events(
         msgs.into_iter()
-            .map(|msg| GatewayEvent::Routing { msg }.into()),
+            .map(|msg| GatewayEvent::RoutingOutgoing { msg }.into()),
     ))
 }
 
 fn apply(
-    verifier: &voting_verifier::Client,
-    msgs: Vec<Message>,
-    action: impl Fn(Vec<(VerificationStatus, Vec<Message>)>) -> (Option<WasmMsg>, Vec<Event>),
+    verifier: &xrpl_voting_verifier::Client,
+    msgs: Vec<XRPLMessage>,
+    action: impl Fn(Vec<(VerificationStatus, Vec<XRPLMessage>)>) -> (Option<WasmMsg>, Vec<Event>),
 ) -> Result<Response, Error> {
     check_for_duplicates(msgs)?
         .then(|msgs| verifier.messages_status(msgs))
@@ -71,12 +74,12 @@ fn apply(
         .then(Ok)
 }
 
-fn check_for_duplicates(msgs: Vec<Message>) -> Result<Vec<Message>, Error> {
+fn check_for_duplicates<T: CrossChainMessage>(msgs: Vec<T>) -> Result<Vec<T>, Error> {
     let duplicates: Vec<_> = msgs
         .iter()
         // the following two map instructions are separated on purpose
         // so the duplicate check is done on the typed id instead of just a string
-        .map(|m| &m.cc_id)
+        .map(|m| m.cc_id())
         .duplicates()
         .map(|cc_id| cc_id.to_string())
         .collect();
@@ -88,7 +91,7 @@ fn check_for_duplicates(msgs: Vec<Message>) -> Result<Vec<Message>, Error> {
 
 fn group_by_status(
     msgs_with_status: impl IntoIterator<Item = MessageStatus>,
-) -> Vec<(VerificationStatus, Vec<Message>)> {
+) -> Vec<(VerificationStatus, Vec<XRPLMessage>)> {
     msgs_with_status
         .into_iter()
         .map(|msg_status| (msg_status.status, msg_status.message))
@@ -100,8 +103,8 @@ fn group_by_status(
 }
 
 fn verify(
-    verifier: &voting_verifier::Client,
-    msgs_by_status: Vec<(VerificationStatus, Vec<Message>)>,
+    verifier: &xrpl_voting_verifier::Client,
+    msgs_by_status: Vec<(VerificationStatus, Vec<XRPLMessage>)>,
 ) -> (Option<WasmMsg>, Vec<Event>) {
     msgs_by_status
         .into_iter()
@@ -117,7 +120,7 @@ fn verify(
 
 fn route(
     router: &Router,
-    msgs_by_status: Vec<(VerificationStatus, Vec<Message>)>,
+    msgs_by_status: Vec<(VerificationStatus, Vec<XRPLMessage>)>,
 ) -> (Option<WasmMsg>, Vec<Event>) {
     msgs_by_status
         .into_iter()
@@ -128,12 +131,12 @@ fn route(
             )
         })
         .then(flat_unzip)
-        .then(|(msgs, events)| (router.route(msgs), events))
+        .then(|(msgs, events)| (router.route(msgs.iter().map(|m| to_its_message(m.clone())).collect()), events))
 }
 
 // not all messages are verifiable, so it's better to only take a reference and allocate a vector on demand
 // instead of requiring the caller to allocate a vector for every message
-fn filter_verifiable_messages(status: VerificationStatus, msgs: &[Message]) -> Vec<Message> {
+fn filter_verifiable_messages(status: VerificationStatus, msgs: &[XRPLMessage]) -> Vec<XRPLMessage> {
     match status {
         VerificationStatus::Unknown
         | VerificationStatus::NotFoundOnSourceChain
@@ -142,7 +145,7 @@ fn filter_verifiable_messages(status: VerificationStatus, msgs: &[Message]) -> V
     }
 }
 
-fn into_verify_events(status: VerificationStatus, msgs: Vec<Message>) -> Vec<Event> {
+fn into_verify_events(status: VerificationStatus, msgs: Vec<XRPLMessage>) -> Vec<Event> {
     match status {
         VerificationStatus::Unknown
         | VerificationStatus::NotFoundOnSourceChain
@@ -161,7 +164,7 @@ fn into_verify_events(status: VerificationStatus, msgs: Vec<Message>) -> Vec<Eve
 
 // not all messages are routable, so it's better to only take a reference and allocate a vector on demand
 // instead of requiring the caller to allocate a vector for every message
-fn filter_routable_messages(status: VerificationStatus, msgs: &[Message]) -> Vec<Message> {
+fn filter_routable_messages(status: VerificationStatus, msgs: &[XRPLMessage]) -> Vec<XRPLMessage> {
     if status == VerificationStatus::SucceededOnSourceChain {
         msgs.to_vec()
     } else {
@@ -169,10 +172,10 @@ fn filter_routable_messages(status: VerificationStatus, msgs: &[Message]) -> Vec
     }
 }
 
-fn into_route_events(status: VerificationStatus, msgs: Vec<Message>) -> Vec<Event> {
+fn into_route_events(status: VerificationStatus, msgs: Vec<XRPLMessage>) -> Vec<Event> {
     match status {
         VerificationStatus::SucceededOnSourceChain => {
-            messages_into_events(msgs, |msg| GatewayEvent::Routing { msg })
+            messages_into_events(msgs, |msg| GatewayEvent::RoutingIncoming { msg })
         }
         _ => messages_into_events(msgs, |msg| GatewayEvent::UnfitForRouting { msg }),
     }
@@ -186,6 +189,21 @@ fn flat_unzip<A, B>(x: impl Iterator<Item = (Vec<A>, Vec<B>)>) -> (Vec<A>, Vec<B
     )
 }
 
-fn messages_into_events(msgs: Vec<Message>, transform: fn(Message) -> GatewayEvent) -> Vec<Event> {
+fn messages_into_events(msgs: Vec<XRPLMessage>, transform: fn(XRPLMessage) -> GatewayEvent) -> Vec<Event> {
     msgs.into_iter().map(|msg| transform(msg).into()).collect()
+}
+
+fn to_its_message(msg: XRPLMessage) -> Message {
+    match msg.clone() {
+        XRPLMessage::ProverMessage(_tx_hash) => todo!(),
+        XRPLMessage::UserMessage(user_message) => {
+            Message {
+                cc_id: msg.cc_id(),
+                source_address: Address::from_str(&user_message.source_address.to_string()).unwrap(),
+                destination_address: user_message.destination_address,
+                destination_chain: user_message.destination_chain,
+                payload_hash: user_message.payload_hash
+            }
+        },
+    }
 }
