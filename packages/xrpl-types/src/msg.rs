@@ -1,0 +1,108 @@
+use std::str::FromStr;
+
+use cosmwasm_schema::cw_serde;
+use cosmwasm_std::{Attribute, HexBinary};
+use router_api::{Address, ChainName, ChainNameRaw, CrossChainId, Message, FIELD_DELIMITER};
+use sha3::{Keccak256, Digest};
+use crate::types::{XRPLPaymentAmount, XRPLAccountId};
+
+pub const CHAIN_NAME: &str = "xrpl"; // TODO
+
+
+pub struct MemoDetails {
+    pub destination_chain: ChainName,
+    pub destination_address: Address,
+    pub payload_hash: [u8; 32],
+}
+
+pub type XRPLHash = [u8; 32];
+
+#[cw_serde]
+pub enum XRPLMessage {
+    ProverMessage(XRPLHash),
+    UserMessage(UserMessage),
+}
+
+impl XRPLMessage {
+    pub fn tx_id(&self) -> [u8; 32] {
+        match self {
+            XRPLMessage::ProverMessage(tx_id) => *tx_id,
+            XRPLMessage::UserMessage(user_message) => user_message.tx_id,
+        }
+    }
+
+    pub fn hash(&self) -> [u8; 32] {
+        match self {
+            XRPLMessage::ProverMessage(tx_id) => *tx_id,
+            XRPLMessage::UserMessage(user_message) => user_message.hash(),
+        }
+    }
+}
+
+#[cw_serde]
+pub struct UserMessage {
+    pub tx_id: XRPLHash, // TODO: use TxHash from xrpl_multisig_prover
+    pub source_address: XRPLAccountId,
+    pub destination_chain: ChainName,
+    pub destination_address: Address,
+    /// for better user experience, the payload hash gets encoded into hex at the edges (input/output),
+    /// but internally, we treat it as raw bytes to enforce its format.
+    #[serde(with = "axelar_wasm_std::hex")]
+    #[schemars(with = "String")] // necessary attribute in conjunction with #[serde(with ...)]
+    pub payload_hash: [u8; 32],
+    pub amount: XRPLPaymentAmount,
+}
+
+impl From<UserMessage> for Vec<Attribute> {
+    fn from(other: UserMessage) -> Self {
+        vec![
+            ("tx_id", HexBinary::from(other.tx_id).to_string()).into(),
+            ("source_address", other.source_address.to_string()).into(),
+            ("destination_chain", other.destination_chain).into(),
+            ("destination_address", other.destination_address.to_string()).into(),
+            (
+                "payload_hash",
+                HexBinary::from(other.payload_hash).to_string(),
+            )
+                .into(),
+            // todo: token, amount
+            ("amount", other.amount.to_string()).into(),
+        ]
+    }
+}
+
+
+impl UserMessage {
+    pub fn hash(&self) -> [u8; 32] {
+        let mut hasher = Keccak256::new();
+        let delimiter_bytes = &[FIELD_DELIMITER as u8]; // TODO: check if this works for XRPL too
+
+        hasher.update(self.tx_id);
+        hasher.update(delimiter_bytes);
+        hasher.update(self.source_address.to_bytes());
+        hasher.update(delimiter_bytes);
+        hasher.update(self.destination_chain.as_ref());
+        hasher.update(delimiter_bytes);
+        hasher.update(self.destination_address.as_str());
+        hasher.update(delimiter_bytes);
+        hasher.update(self.payload_hash);
+
+        hasher.finalize().into()
+    }
+}
+
+pub trait CrossChainMessage {
+    fn cc_id(&self) -> CrossChainId;
+}
+
+impl CrossChainMessage for Message {
+    fn cc_id(&self) -> CrossChainId {
+        self.cc_id.clone()
+    }
+}
+
+impl CrossChainMessage for XRPLMessage {
+    fn cc_id(&self) -> CrossChainId {
+        CrossChainId { source_chain: ChainNameRaw::from_str(CHAIN_NAME).unwrap(), message_id: HexBinary::from(self.tx_id()).to_string().try_into().unwrap() }
+    }
+}
