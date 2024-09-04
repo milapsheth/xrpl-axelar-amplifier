@@ -2,12 +2,14 @@ use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{Addr, Storage};
 use cw_storage_plus::{Item, Map};
 use error_stack::{Result, ResultExt};
-use router_api::{CrossChainId, Message};
+use router_api::{ChainName, CrossChainId, Message};
 
 #[cw_serde]
 pub(crate) struct Config {
     pub verifier: Addr,
     pub router: Addr,
+    pub its_hub: Addr,
+    pub axelar_chain_name: ChainName,
 }
 
 pub(crate) fn save_config(storage: &mut dyn Storage, value: &Config) -> Result<(), Error> {
@@ -36,9 +38,11 @@ pub const OUTGOING_MESSAGES: Map<&CrossChainId, Message> = Map::new(OUTGOING_MES
 
 #[cfg(test)]
 mod test {
+    use std::str::FromStr;
+
     use cosmwasm_std::testing::mock_dependencies;
     use cosmwasm_std::Addr;
-    use router_api::{CrossChainId, Message};
+    use router_api::{ChainName, CrossChainId, Message};
 
     use crate::state::{load_config, save_config, Config, OUTGOING_MESSAGES};
 
@@ -49,6 +53,8 @@ mod test {
         let config = Config {
             verifier: Addr::unchecked("verifier"),
             router: Addr::unchecked("router"),
+            its_hub: Addr::unchecked("its_hub"),
+            axelar_chain_name: ChainName::from_str("axelar").unwrap(),
         };
         assert!(save_config(deps.as_mut().storage, &config).is_ok());
 

@@ -1,11 +1,11 @@
 use std::str::FromStr;
 
 use axelar_wasm_std::{FnExt, VerificationStatus};
-use cosmwasm_std::{Event, Response, Storage, WasmMsg};
+use cosmwasm_std::{Addr, Event, Response, Storage, WasmMsg};
 use error_stack::{report, Result, ResultExt};
 use itertools::Itertools;
 use router_api::client::Router;
-use router_api::{Address, Message};
+use router_api::{Address, ChainName, Message};
 use xrpl_voting_verifier::msg::MessageStatus;
 use xrpl_types::msg::{CrossChainMessage, XRPLMessage};
 
@@ -36,10 +36,20 @@ pub(crate) fn route_incoming_messages(
 pub(crate) fn route_outgoing_messages(
     store: &mut dyn Storage,
     verified: Vec<Message>,
+    its_hub: Addr,
+    axelar_chain_name: ChainName,
 ) -> Result<Response, Error> {
     let msgs = check_for_duplicates(verified)?;
 
     for msg in msgs.iter() {
+        if msg.source_address.to_string() != its_hub.to_string() {
+            return Err(Error::InvalidMessage(msg.cc_id.clone()).into());
+        }
+
+        if msg.cc_id.source_chain != axelar_chain_name {
+            return Err(Error::InvalidMessage(msg.cc_id.clone()).into())
+        }
+
         state::OUTGOING_MESSAGES
             .may_load(store, &msg.cc_id)
             .change_context(Error::InvalidStoreAccess)

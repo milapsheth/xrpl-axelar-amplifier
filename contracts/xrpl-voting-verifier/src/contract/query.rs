@@ -123,10 +123,10 @@ mod tests {
     use cosmwasm_std::testing::{mock_dependencies, mock_env};
     use cosmwasm_std::{Addr, Uint128, Uint64};
     use itertools::Itertools;
-    use xrpl_multisig_prover::types::XRPLPaymentAmount;
+    use xrpl_types::msg::UserMessage;
+    use xrpl_types::types::XRPLPaymentAmount;
 
     use super::*;
-    use crate::msg::UserMessage;
     use crate::state::PollContent;
 
     #[test]

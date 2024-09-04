@@ -3,7 +3,6 @@ use std::fmt::Debug;
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{Binary, Deps, DepsMut, Empty, Env, MessageInfo, Response};
-use xrpl_types::msg::XRPLMessage;
 use crate::msg::{ExecuteMsg, QueryMsg};
 use router_api::CrossChainId;
 
@@ -79,6 +78,8 @@ pub enum Error {
     MessageMismatch(CrossChainId),
     #[error("router only")]
     RouterOnly,
+    #[error("invalid message with ID {0}")]
+    InvalidMessage(CrossChainId),
 }
 
 mod internal {
@@ -111,7 +112,13 @@ mod internal {
             .change_context(Error::InvalidAddress)
             .attach_printable(msg.verifier_address)?;
 
-        state::save_config(deps.storage, &Config { verifier, router })
+        let its_hub = deps
+            .api
+            .addr_validate(&msg.its_hub_address)
+            .change_context(Error::InvalidAddress)
+            .attach_printable(msg.its_hub_address)?;
+
+        state::save_config(deps.storage, &Config { verifier, router, its_hub, axelar_chain_name: msg.axelar_chain_name })
             .change_context(Error::InvalidStoreAccess)?;
 
         Ok(Response::new())
@@ -136,7 +143,8 @@ mod internal {
                 if info.sender != router.address {
                     return Err(Error::RouterOnly)?;
                 }
-                contract::execute::route_outgoing_messages(deps.storage, msgs)
+
+                contract::execute::route_outgoing_messages(deps.storage, msgs, config.its_hub, config.axelar_chain_name)
             },
             ExecuteMsg::RouteIncomingMessages(msgs) => contract::execute::route_incoming_messages(&verifier, &router, msgs)
         }

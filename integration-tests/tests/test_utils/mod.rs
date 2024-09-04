@@ -7,6 +7,7 @@ use axelar_wasm_std::{
     VerificationStatus,
 };
 use router_api::{Address, ChainName, CrossChainId, GatewayDirection, Message};
+use xrpl_types::types::{XRPLAccountId, XRPLToken, XRPL_MESSAGE_ID_FORMAT};
 use std::collections::{HashMap, HashSet};
 
 use axelar_wasm_std::msg_id::HexTxHashAndEventIndex;
@@ -35,7 +36,6 @@ use multisig::{
     verifier_set::VerifierSet,
 };
 use multisig_prover::msg::VerifierSetResponse;
-use xrpl_multisig_prover::types::{XRPLAccountId, XRPLToken, XRPL_MESSAGE_ID_FORMAT};
 use rewards::state::PoolId;
 use service_registry::msg::ExecuteMsg;
 use tofn::ecdsa::KeyPair;

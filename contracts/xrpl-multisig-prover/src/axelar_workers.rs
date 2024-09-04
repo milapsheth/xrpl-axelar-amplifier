@@ -4,9 +4,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use axelar_wasm_std::MajorityThreshold;
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{Addr, Fraction, HexBinary, Uint128};
+use cosmwasm_std::{Fraction, HexBinary, Uint128};
 use multisig::{
-    key::{KeyType, PublicKey},
+    key::KeyType,
     msg::Signer,
 };
 use service_registry::state::WeightedVerifier;

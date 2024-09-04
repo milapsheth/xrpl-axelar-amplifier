@@ -8,7 +8,6 @@ use crate::types::{XRPLPaymentAmount, XRPLAccountId};
 
 pub const CHAIN_NAME: &str = "xrpl"; // TODO
 
-
 pub struct MemoDetails {
     pub destination_chain: ChainName,
     pub destination_address: Address,
@@ -18,6 +17,7 @@ pub struct MemoDetails {
 pub type XRPLHash = [u8; 32];
 
 #[cw_serde]
+#[derive(Eq, Hash)]
 pub enum XRPLMessage {
     ProverMessage(XRPLHash),
     UserMessage(UserMessage),
@@ -40,6 +40,7 @@ impl XRPLMessage {
 }
 
 #[cw_serde]
+#[derive(Eq, Hash)]
 pub struct UserMessage {
     pub tx_id: XRPLHash, // TODO: use TxHash from xrpl_multisig_prover
     pub source_address: XRPLAccountId,
@@ -65,12 +66,31 @@ impl From<UserMessage> for Vec<Attribute> {
                 HexBinary::from(other.payload_hash).to_string(),
             )
                 .into(),
-            // todo: token, amount
+            // TODO: token, amount
             ("amount", other.amount.to_string()).into(),
         ]
     }
 }
 
+impl From<XRPLMessage> for Vec<Attribute> {
+    fn from(other: XRPLMessage) -> Self {
+        match other {
+            XRPLMessage::ProverMessage(tx_id) => {
+                vec![
+                    ("tx_id", HexBinary::from(tx_id).to_string()).into(),
+                    ("type", "prover_message").into(),
+                ]
+            },
+            XRPLMessage::UserMessage(msg) => {
+                let mut res: Vec<Attribute> = msg.into();
+                res.push(
+                    ("type", "user_message").into()
+                );
+                res
+            },
+        }
+    }
+}
 
 impl UserMessage {
     pub fn hash(&self) -> [u8; 32] {

@@ -1,5 +1,6 @@
 use cosmwasm_std::{from_json, Attribute, DepsMut, HexBinary, Reply, Response, Uint64};
 use cw_utils::{parse_reply_execute_data, MsgExecuteContractResponse};
+use xrpl_types::types::XRPLUnsignedTx;
 
 use crate::{
     error::ContractError,
@@ -8,7 +9,6 @@ use crate::{
         MESSAGE_ID_TO_MULTISIG_SESSION_ID, MULTISIG_SESSION_ID_TO_TX_HASH, REPLY_MESSAGE_ID,
         REPLY_TX_HASH, TRANSACTION_INFO,
     },
-    types::XRPLUnsignedTx,
     xrpl_serialize::XRPLSerialize,
 };
 

@@ -1,7 +1,4 @@
-use crate::{
-    axelar_workers::VerifierSet,
-    types::{TransactionInfo, TxHash, XRPLToken},
-};
+use crate::axelar_workers::VerifierSet;
 use axelar_wasm_std::MajorityThreshold;
 use router_api::CrossChainId;
 use cosmwasm_schema::cw_serde;

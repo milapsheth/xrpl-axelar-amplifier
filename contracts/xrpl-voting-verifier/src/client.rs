@@ -74,10 +74,11 @@ mod test {
     use axelar_wasm_std::{Threshold, VerificationStatus};
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info, MockQuerier};
     use cosmwasm_std::{from_json, Addr, DepsMut, QuerierWrapper, Uint64, WasmQuery};
-    use xrpl_multisig_prover::types::XRPLPaymentAmount;
+    use xrpl_types::msg::*;
+    use xrpl_types::types::XRPLPaymentAmount;
 
     use crate::contract::{instantiate, query};
-    use crate::msg::{InstantiateMsg, MessageStatus, QueryMsg, UserMessage, XRPLMessage};
+    use crate::msg::{InstantiateMsg, MessageStatus, QueryMsg};
     use crate::Client;
 
     #[test]

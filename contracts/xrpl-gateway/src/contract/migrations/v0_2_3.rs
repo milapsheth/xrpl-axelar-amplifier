@@ -85,8 +85,11 @@ impl KeyDeserialize for &CrossChainId {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
     use cosmwasm_std::DepsMut;
+    use router_api::ChainName;
 
     use crate::contract::migrations::v0_2_3;
     use crate::contract::{instantiate, CONTRACT_NAME, CONTRACT_VERSION};
@@ -128,6 +131,8 @@ mod tests {
             InstantiateMsg {
                 verifier_address: "verifier".to_string(),
                 router_address: "router".to_string(),
+                its_hub_address: "its_hub".to_string(),
+                axelar_chain_name: ChainName::from_str("axelar").unwrap(),
             },
         )
         .unwrap();

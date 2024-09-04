@@ -19,25 +19,16 @@ use voting_verifier::msg::ExecuteMsg;
 use events::Error::EventTypeMismatch;
 use tracing::{info, info_span};
 use xrpl_multisig_prover::querier::XRPL_CHAIN_NAME;
+use xrpl_types::msg::XRPLMessage;
 
 use crate::event_processor::EventHandler;
 use crate::handlers::errors::Error;
-use crate::types::{Hash, TMAddress};
+use crate::types::TMAddress;
 use crate::xrpl::json_rpc::XRPLClient;
 use crate::xrpl::verifier::verify_message;
 use crate::xrpl::types::XRPLAddress;
 
 type Result<T> = error_stack::Result<T, Error>;
-
-#[derive(Deserialize, Debug)]
-pub struct Message {
-    pub tx_id: Hash,
-    pub event_index: u32,
-    pub destination_address: String,
-    pub destination_chain: router_api::ChainName,
-    pub source_address: XRPLAddress,
-    pub payload_hash: Hash,
-}
 
 #[derive(Deserialize, Debug)]
 #[try_from("wasm-messages_poll_started")]
@@ -47,7 +38,7 @@ struct PollStartedEvent {
     source_gateway_address: XRPLAddress,
     confirmation_height: u64,
     expires_at: u64,
-    messages: Vec<Message>,
+    messages: Vec<XRPLMessage>,
     participants: Vec<TMAddress>,
 }
 
@@ -108,7 +99,7 @@ where
             source_gateway_address,
             messages,
             expires_at,
-            confirmation_height,
+            confirmation_height, // TODO
             participants,
         } = match event.try_into() as error_stack::Result<_, _> {
             Err(report) if matches!(report.current_context(), EventTypeMismatch(_)) => {
@@ -141,7 +132,7 @@ where
 
         // Does not assume voting verifier emits unique tx ids.
         // RPC will throw an error if the input contains any duplicate, deduplicate tx ids to avoid unnecessary failures.
-        let deduplicated_tx_ids: HashSet<_> = messages.iter().map(|msg| msg.tx_id.clone()).collect();
+        let deduplicated_tx_ids: HashSet<_> = messages.iter().map(|msg| msg.tx_id().clone()).collect();
 
         let mut tx_responses = HashMap::new();
 
@@ -157,7 +148,7 @@ where
         let message_ids = messages
             .iter()
             .map(|message| {
-                HexTxHashAndEventIndex::new(message.tx_id, message.event_index).to_string()
+                HexTxHashAndEventIndex::new(message.tx_id(), 0u32).to_string()
             })
             .collect::<Vec<_>>();
 
@@ -174,7 +165,7 @@ where
                 .iter()
                 .map(|msg| {
                     tx_responses // TODO: should be finalized_tx_receipts
-                        .get(&msg.tx_id)
+                        .get(&msg.tx_id())
                         .and_then(|tx_response| tx_response.as_ref().map(|tx| {
                             verify_message(&source_gateway_address, &tx.tx, msg) // TODO: clean up
                         }))

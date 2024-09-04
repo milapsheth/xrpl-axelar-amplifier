@@ -1,5 +1,6 @@
 use std::fmt;
 use std::fmt::Display;
+use std::str::FromStr;
 
 use axelar_wasm_std::VerificationStatus;
 use router_api::CrossChainId;
@@ -47,6 +48,7 @@ pub enum TransactionStatus {
 #[cw_serde]
 pub struct TxHash(pub HexBinary);
 
+// TODO: should be HexTxHash
 pub const XRPL_MESSAGE_ID_FORMAT: axelar_wasm_std::msg_id::MessageIdFormat = axelar_wasm_std::msg_id::MessageIdFormat::HexTxHashAndEventIndex;
 
 impl TryFrom<CrossChainId> for TxHash {
@@ -131,12 +133,14 @@ impl Operator {
 }
 
 #[cw_serde]
+#[derive(Eq, Hash)]
 pub struct XRPLToken {
     pub issuer: XRPLAccountId,
     pub currency: XRPLCurrency,
 }
 
 #[cw_serde]
+#[derive(Eq, Hash)]
 pub enum XRPLPaymentAmount {
     Drops(u64),
     Token(XRPLToken, XRPLTokenAmount),
@@ -155,6 +159,11 @@ impl Display for XRPLPaymentAmount {
 #[cw_serde]
 pub struct XRPLMemo(pub HexBinary);
 
+impl From<XRPLMemo> for HexBinary {
+    fn from(memo: XRPLMemo) -> Self {
+        memo.0
+    }
+}
 
 #[cw_serde]
 pub enum XRPLSequence {
@@ -259,6 +268,7 @@ pub struct XRPLTrustSetTx {
 }
 
 #[cw_serde]
+#[derive(Eq, Hash)]
 pub struct XRPLAccountId([u8; 20]);
 
 impl XRPLAccountId {
@@ -372,6 +382,7 @@ impl XRPLSignedTransaction {
 }
 
 #[cw_serde]
+#[derive(Eq, Hash)]
 pub struct XRPLCurrency(String);
 
 impl XRPLCurrency {
@@ -411,6 +422,7 @@ pub const MAX_EXPONENT: i64 = 80;
 // such that MIN_MANTISSA <= mantissa <= MAX_MANTISSA (or equal to zero), MIN_EXPONENT <= exponent <= MAX_EXPONENT,
 // In XRPL generally it can be decimal and even negative (!) but in our case that doesn't apply.
 #[cw_serde]
+#[derive(Eq, Hash)]
 pub struct XRPLTokenAmount {
     mantissa: u64,
     exponent: i64,
@@ -440,4 +452,94 @@ impl XRPLTokenAmount {
                 .to_be_bytes()
         }
     }
+}
+
+impl TryFrom<String> for XRPLTokenAmount {
+    type Error = XRPLError;
+
+    fn try_from(s: String) -> Result<XRPLTokenAmount, XRPLError> {
+        let exp_separator: &[_] = &['e', 'E'];
+
+        let (base_part, exponent_value) = match s.find(exp_separator) {
+            None => (s.as_str(), 0),
+            Some(loc) => {
+                let (base, exp) = (&s[..loc], &s[loc + 1..]);
+                (base, i64::from_str(exp).map_err(|_| XRPLError::InvalidAmount { reason: "invalid exponent".to_string() })?)
+            }
+        };
+
+        if base_part.is_empty() {
+            return Err(XRPLError::InvalidAmount { reason: "base part empty".to_string() });
+        }
+
+        let (mut digits, decimal_offset): (String, _) = match base_part.find('.') {
+            None => (base_part.to_string(), 0),
+            Some(loc) => {
+                let (lead, trail) = (&base_part[..loc], &base_part[loc + 1..]);
+                let mut digits = String::from(lead);
+                digits.push_str(trail);
+                let trail_digits = trail.chars().filter(|c| *c != '_').count();
+                (digits, trail_digits as i64)
+            }
+        };
+
+        let exponent = match decimal_offset.checked_sub(exponent_value) {
+            Some(exponent) => exponent,
+            None => {
+                return Err(XRPLError::InvalidAmount { reason: "overflow".to_string() });
+            }
+        };
+
+        if digits.starts_with('-') {
+            return Err(XRPLError::InvalidAmount { reason: "negative amount".to_string() });
+        }
+
+        if digits.starts_with('+') {
+            digits = digits[1..].to_string();
+        }
+
+        let mantissa = Uint128::from_str(digits.as_str()).map_err(|e| XRPLError::InvalidAmount { reason: e.to_string() })?;
+
+        let (mantissa, exponent) = canonicalize_mantissa(mantissa, exponent * -1)?;
+
+        Ok(XRPLTokenAmount::new(mantissa, exponent))
+    }
+}
+
+// always called when XRPLTokenAmount instantiated
+// see https://github.com/XRPLF/xrpl-dev-portal/blob/82da0e53a8d6cdf2b94a80594541d868b4d03b94/content/_code-samples/tx-serialization/py/xrpl_num.py#L19
+pub fn canonicalize_mantissa(
+    mut mantissa: Uint128,
+    mut exponent: i64,
+) -> Result<(u64, i64), XRPLError> {
+    let ten = Uint128::from(10u128);
+
+    while mantissa < MIN_MANTISSA.into() && exponent > MIN_EXPONENT {
+        mantissa *= ten;
+        exponent -= 1;
+    }
+
+    while mantissa > MAX_MANTISSA.into() && exponent > MIN_EXPONENT {
+        if exponent > MAX_EXPONENT {
+            return Err(XRPLError::InvalidAmount {
+                reason: "overflow".to_string(),
+            });
+        }
+        mantissa /= ten;
+        exponent += 1;
+    }
+
+    if exponent < MIN_EXPONENT || mantissa < MIN_MANTISSA.into() {
+        return Ok((0, 1));
+    }
+
+    if exponent > MAX_EXPONENT || mantissa > MAX_MANTISSA.into() {
+        return Err(XRPLError::InvalidAmount {
+            reason: format!("overflow exponent {} mantissa {}", exponent, mantissa).to_string(),
+        });
+    }
+
+    let mantissa = u64::from_be_bytes(mantissa.to_be_bytes()[8..].try_into().unwrap());
+
+    Ok((mantissa, exponent))
 }

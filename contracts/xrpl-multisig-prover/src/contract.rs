@@ -11,6 +11,7 @@ use cosmwasm_std::{
 use voting_verifier::events::parse_message_id;
 
 use multisig::{key::PublicKey, types::MultisigState};
+use xrpl_types::error::XRPLError;
 use xrpl_types::types::*;
 
 use crate::{
@@ -485,7 +486,7 @@ fn update_tx_status(
         .filter(|(_, signer)| signer_public_keys.contains(&signer.pub_key))
         .filter_map(|(signer_address, signer)| multisig_session.signatures.get(&signer_address).cloned().zip(Some(signer)))
         .map(XRPLSigner::try_from)
-        .collect::<Result<Vec<_>, ContractError>>()?;
+        .collect::<Result<Vec<XRPLSigner>, XRPLError>>()?;
 
     if xrpl_signers.len() != signer_public_keys.len() {
         return Err(ContractError::SignatureNotFound);

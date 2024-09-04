@@ -1,22 +1,20 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use serde::Serialize;
-use router_api::ChainName;
 use xrpl_http_client::{Amount, ResultCategory};
 use xrpl_http_client::{Memo, Transaction::Payment, Transaction};
 use axelar_wasm_std::voting::Vote;
-use cosmwasm_std::{Uint256, HexBinary};
+use xrpl_types::msg::{UserMessage, XRPLMessage};
+use xrpl_types::types::{XRPLAccountId, XRPLCurrency, XRPLPaymentAmount, XRPLToken};
 
-use crate::handlers::xrpl_verify_msg::Message;
 use crate::xrpl::types::XRPLAddress;
 
 pub fn verify_message(
     multisig_address: &XRPLAddress,
     tx: &Transaction,
-    message: &Message,
+    message: &XRPLMessage,
 ) -> Vote {
-    if message.event_index == 0 && is_validated_tx(tx) && (is_valid_multisig_tx(tx, multisig_address, message) || is_valid_deposit_tx(tx, multisig_address, message)) {
+    if is_validated_tx(tx) && (is_valid_multisig_tx(tx, multisig_address, message) || is_valid_deposit_tx(tx, multisig_address, message)) {
         if is_successful_tx(tx) {
             Vote::SucceededOnChain
         } else {
@@ -31,14 +29,16 @@ pub fn is_validated_tx(tx: &Transaction) -> bool {
     matches!(tx.common().validated, Some(true))
 }
 
-pub fn is_valid_multisig_tx(tx: &Transaction, multisig_address: &XRPLAddress, message: &Message) -> bool {
-    tx.common().account == multisig_address.0 && message.source_address == *multisig_address && message.destination_chain == ChainName::from_str("XRPL").unwrap()
+pub fn is_valid_multisig_tx(tx: &Transaction, multisig_address: &XRPLAddress, message: &XRPLMessage) -> bool {
+    tx.common().account == multisig_address.0 && matches!(message, XRPLMessage::ProverMessage(_))
 }
 
-pub fn is_valid_deposit_tx(tx: &Transaction, multisig_address: &XRPLAddress, message: &Message) -> bool {
+pub fn is_valid_deposit_tx(tx: &Transaction, multisig_address: &XRPLAddress, message: &XRPLMessage) -> bool {
     if let Payment(payment_tx) = &tx {
         if let Some(memos) = payment_tx.clone().common.memos {
-            return payment_tx.destination == multisig_address.0 && message.source_address.0 == tx.common().account && verify_memos(payment_tx.amount.clone(), memos, message);
+            if let XRPLMessage::UserMessage(user_msg) = message {
+                return payment_tx.destination == multisig_address.0 && user_msg.source_address.to_string() == tx.common().account && verify_memos(payment_tx.amount.clone(), memos, user_msg);
+            }
         }
     }
     return false;
@@ -51,15 +51,6 @@ pub fn is_successful_tx(tx: &Transaction) -> bool {
     return false;
 }
 
-#[derive(Serialize, Debug, PartialEq)]
-struct MemoPayload {
-    fee: Uint256,
-    relayer: String,
-    amount: Uint256,
-    currency: String,
-    payload_hash: HexBinary
-}
-
 fn remove_0x_prefix(s: String) -> String {
     if s.starts_with("0x") {
         s[2..].to_string()
@@ -68,7 +59,7 @@ fn remove_0x_prefix(s: String) -> String {
     }
 }
 
-pub fn verify_memos(amount: Amount, memos: Vec<Memo>, message: &Message) -> bool {
+pub fn verify_memos(amount: Amount, memos: Vec<Memo>, message: &UserMessage) -> bool {
     let memo_kv: HashMap<String, String> = memos
         .into_iter()
         .filter(|m| m.memo_type.is_some() && m.memo_data.is_some())
@@ -76,21 +67,23 @@ pub fn verify_memos(amount: Amount, memos: Vec<Memo>, message: &Message) -> bool
         .collect();
 
     || -> Option<bool> {
-        let (token , amount) = match amount {
-            Amount::Issued(a) => (a.currency, a.value),
-            Amount::Drops(a) => ("XRP".to_string(), a),
+        let amount = match amount {
+            Amount::Issued(a) => XRPLPaymentAmount::Token(
+                XRPLToken {
+                    issuer: XRPLAccountId::from_str(&a.issuer).unwrap(),
+                    currency: XRPLCurrency::try_from(a.currency).unwrap(),
+                },
+                a.value.try_into().ok()?
+            ),
+            Amount::Drops(a) => XRPLPaymentAmount::Drops(a.parse().ok()?),
         };
 
-        let expected_payload = ethers_core::abi::encode(&vec![
-            ethers_core::abi::Token::String(token),
-            ethers_core::abi::Token::Uint(ethers_core::types::U256::from_dec_str(amount.as_ref()).ok()?),
-            ethers_core::abi::Token::FixedBytes(hex::decode(remove_0x_prefix(memo_kv.get("payload_hash")?.clone())).ok()?),
-        ]);
-        let expected_payload_hash = ethers_core::utils::keccak256(expected_payload.clone());
-
-        Some(memo_kv.get("destination_address") == Some(&remove_0x_prefix(message.destination_address.clone()).to_uppercase())
-        && memo_kv.get("destination_chain") == Some(&hex::encode_upper(message.destination_chain.to_string()))
-        && *message.payload_hash.to_fixed_bytes().to_vec() == expected_payload_hash)
+        Some(
+            memo_kv.get("destination_address")? == &remove_0x_prefix(message.destination_address.to_string()).to_uppercase()
+            && memo_kv.get("destination_chain")? == &hex::encode_upper(message.destination_chain.to_string())
+            && hex::decode(&remove_0x_prefix(memo_kv.get("payload_hash")?.clone())).ok()? == message.payload_hash
+            && amount == message.amount
+        )
     }().unwrap_or(false)
 }
 
@@ -98,11 +91,10 @@ pub fn verify_memos(amount: Amount, memos: Vec<Memo>, message: &Message) -> bool
 mod test {
     use std::str::FromStr;
 
-    use crate::{types::Hash, xrpl::{types::XRPLAddress, verifier::verify_memos}};
-    use ethers_core::types::TxHash;
+    use crate::xrpl::verifier::verify_memos;
     use xrpl_http_client::{Amount, Memo};
-    use crate::handlers::xrpl_verify_msg::Message;
-    use router_api::ChainName;
+    use xrpl_types::{msg::UserMessage, types::{XRPLAccountId, XRPLPaymentAmount}};
+    use router_api::{Address, ChainName};
 
     // TODO: add adapted EVM tests
 
@@ -125,14 +117,14 @@ mod test {
                 memo_format: None
             }
         ];
-        let message = Message {
-            tx_id: Hash::random(),
-            event_index: 14,
-            source_address: XRPLAddress("raNVNWvhUQzFkDDTdEw3roXRJfMJFVJuQo".to_string()),
-            destination_address: "0x592639c10223C4EC6C0ffc670e94d289A25DD1ad".to_string(),
+        let user_message = UserMessage {
+            tx_id: [0; 32],
+            source_address: XRPLAccountId::from_str("raNVNWvhUQzFkDDTdEw3roXRJfMJFVJuQo").unwrap(),
+            destination_address: Address::try_from("0x592639c10223C4EC6C0ffc670e94d289A25DD1ad".to_string()).unwrap(),
             destination_chain: ChainName::from_str("ethereum").unwrap(),
-            payload_hash: TxHash(hex::decode("feb30b51f41e4785664824dd0ee694e0d275757753f570e9f6b5e27d06197fa7").unwrap().to_vec().try_into().unwrap())
+            payload_hash: hex::decode("feb30b51f41e4785664824dd0ee694e0d275757753f570e9f6b5e27d06197fa7").unwrap().to_vec().try_into().unwrap(),
+            amount: XRPLPaymentAmount::Drops(100000),
         };
-        assert!(verify_memos(Amount::Drops("1000000".to_string()), memos, &message));
+        assert!(verify_memos(Amount::Drops("1000000".to_string()), memos, &user_message));
     }
 }

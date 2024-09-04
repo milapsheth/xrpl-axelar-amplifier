@@ -1,7 +1,7 @@
-use cosmwasm_schema::cw_serde;
+use cosmwasm_schema::{cw_serde, QueryResponses};
 use xrpl_types::msg::XRPLMessage;
-use router_api::Message;
-use msgs_derive::{EnsurePermissions, QueryResponse};
+use router_api::{ChainName, CrossChainId, Message};
+use msgs_derive::EnsurePermissions;
 
 #[cw_serde]
 pub struct InstantiateMsg {
@@ -9,6 +9,10 @@ pub struct InstantiateMsg {
     pub verifier_address: String,
     /// Address of the router contract on axelar.
     pub router_address: String,
+    /// Address of the ITS Hub contract on axelar.
+    pub its_hub_address: String,
+    /// Chain name of the axelar chain.
+    pub axelar_chain_name: ChainName,
 }
 
 #[cw_serde]
@@ -38,4 +42,3 @@ pub enum QueryMsg {
     #[returns(Vec<Message>)]
     OutgoingMessages(Vec<CrossChainId>),
 }
-

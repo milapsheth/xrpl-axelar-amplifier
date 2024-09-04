@@ -3,6 +3,7 @@ use cosmwasm_std::{HexBinary, StdResult, Storage, Uint64};
 
 use multisig::key::PublicKey;
 use multisig::{key::Signature, types::MultisigState};
+use xrpl_types::error::XRPLError;
 
 use crate::state::{AVAILABLE_TICKETS, MESSAGE_ID_TO_MULTISIG_SESSION_ID, MESSAGE_ID_TO_TICKET};
 use crate::{
@@ -10,7 +11,6 @@ use crate::{
     msg::GetProofResponse,
     querier::Querier,
     state::{CURRENT_VERIFIER_SET, MULTISIG_SESSION_ID_TO_TX_HASH, TRANSACTION_INFO},
-    types::TransactionStatus,
     xrpl_multisig::{self, HASH_PREFIX_UNSIGNED_TX_MULTI_SIGNING},
     xrpl_serialize::XRPLSerialize,
 };
@@ -71,7 +71,7 @@ pub fn get_proof(
                 .into_iter()
                 .filter_map(|(signer_address, signer)| multisig_session.signatures.get(&signer_address).cloned().zip(Some(signer)))
                 .map(XRPLSigner::try_from)
-                .collect::<Result<Vec<_>, ContractError>>()?;
+                .collect::<Result<Vec<_>, XRPLError>>()?;
             let signed_tx = XRPLSignedTransaction::new(tx_info.unsigned_contents, xrpl_signers);
             let tx_blob: HexBinary = HexBinary::from(signed_tx.xrpl_serialize()?);
             GetProofResponse::Completed {

@@ -2,9 +2,6 @@ use axelar_wasm_std::voting::{PollId, PollStatus, Vote, WeightedPoll};
 use axelar_wasm_std::{nonempty, MajorityThreshold, VerificationStatus};
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use msgs_derive::EnsurePermissions;
-use router_api::{Address, ChainName, FIELD_DELIMITER};
-use sha3::{Keccak256, Digest};
-use xrpl_types::types::*;
 use xrpl_types::msg::*;
 
 #[cw_serde]

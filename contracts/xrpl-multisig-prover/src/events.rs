@@ -4,8 +4,8 @@ use axelar_wasm_std::Snapshot;
 use cosmwasm_std::{HexBinary, Uint64};
 use multisig::key::PublicKey;
 use serde_json::to_string;
+use xrpl_types::types::TxHash;
 
-use crate::types::*;
 pub enum Event {
     ProofUnderConstruction {
         tx_hash: TxHash,

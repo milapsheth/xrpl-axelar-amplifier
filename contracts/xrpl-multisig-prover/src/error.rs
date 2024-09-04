@@ -10,7 +10,7 @@ pub enum ContractError {
     Std(#[from] StdError),
 
     #[error(transparent)]
-    TypeError(#[from] XRPLError),
+    TypeError(#[from] XRPLError), // TODO: rename to TypeConversionError
 
     #[error("invalid amount: {reason}")]
     InvalidAmount { reason: String },

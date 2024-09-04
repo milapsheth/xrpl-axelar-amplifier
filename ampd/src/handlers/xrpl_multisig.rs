@@ -18,8 +18,8 @@ use events::Error::EventTypeMismatch;
 use events_derive;
 use events_derive::try_from;
 use multisig::msg::ExecuteMsg;
+use xrpl_types::types::XRPLAccountId;
 use crate::types::*;
-use xrpl_multisig_prover::types::*;
 
 use crate::event_processor::EventHandler;
 use crate::handlers::errors::Error::{self, DeserializeEvent};

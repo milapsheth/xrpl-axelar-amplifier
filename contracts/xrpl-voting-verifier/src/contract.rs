@@ -90,7 +90,6 @@ pub fn migrate(
 
 #[cfg(test)]
 mod test {
-    use axelar_wasm_std::address_format::AddressFormat;
     use axelar_wasm_std::voting::Vote;
     use axelar_wasm_std::{
         MajorityThreshold, Threshold, VerificationStatus,
@@ -99,15 +98,15 @@ mod test {
         mock_dependencies, mock_env, mock_info, MockApi, MockQuerier, MockStorage,
     };
     use cosmwasm_std::{from_json, Addr, Empty, Fraction, OwnedDeps, Uint128, Uint64, WasmQuery};
-    use router_api::ChainName;
     use service_registry::state::{
         AuthorizationState, BondingState, Verifier, WeightedVerifier, VERIFIER_WEIGHT,
     };
     use sha3::{Digest, Keccak256};
-    use xrpl_multisig_prover::types::{XRPLAccountId, XRPLPaymentAmount};
+    use xrpl_types::msg::*;
+    use xrpl_types::types::*;
 
     use super::*;
-    use crate::msg::{MessageStatus, UserMessage, XRPLHash, XRPLMessage};
+    use crate::msg::MessageStatus;
 
     const SENDER: &str = "sender";
     const SERVICE_REGISTRY_ADDRESS: &str = "service_registry_address";
@@ -115,10 +114,6 @@ mod test {
     const SERVICE_NAME: &str = "service_name";
     const POLL_BLOCK_EXPIRY: u64 = 100;
     const GOVERNANCE: &str = "governance";
-
-    fn source_chain() -> ChainName {
-        "source-chain".parse().unwrap()
-    }
 
     fn initial_voting_threshold() -> MajorityThreshold {
         Threshold::try_from((2, 3)).unwrap().try_into().unwrap()

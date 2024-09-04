@@ -4,7 +4,7 @@ use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::{HexBinary, Uint64};
 use multisig::key::PublicKey;
 
-use crate::types::{TxHash, XRPLToken};
+use xrpl_types::types::{TxHash, XRPLToken};
 
 #[cw_serde]
 pub struct InstantiateMsg {

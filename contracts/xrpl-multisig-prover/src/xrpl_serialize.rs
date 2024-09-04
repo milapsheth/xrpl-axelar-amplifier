@@ -4,7 +4,7 @@ use cosmwasm_std::{HexBinary, Uint64};
 use multisig::key::PublicKey;
 use xrpl_types::types::*;
 
-use crate::{error::ContractError, types::*};
+use crate::error::ContractError;
 
 const PAYMENT_TX_TYPE: u16 = 0;
 const TICKET_CREATE_TX_TYPE: u16 = 10;
@@ -199,11 +199,6 @@ impl TryInto<XRPLObject> for XRPLSignerEntry {
     }
 }
 
-impl From<XRPLMemo> for HexBinary {
-    fn from(memo: XRPLMemo) -> Self {
-        memo.0
-    }
-}
 
 impl TryInto<XRPLObject> for XRPLMemo {
     type Error = ContractError;
@@ -469,6 +464,8 @@ mod tests {
 
     use cosmwasm_std::Uint128;
     use multisig::key::PublicKey;
+
+    use crate::types::canonicalize_coin_amount;
 
     use super::*;
 

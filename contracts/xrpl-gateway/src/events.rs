@@ -11,7 +11,7 @@ pub enum GatewayEvent {
     RoutingOutgoing { msg: Message },
 }
 
-fn make_message_event(event_name: &str, msg: XRPLMessage) -> Event {
+fn make_message_event<T: Into<Vec<Attribute>>>(event_name: &str, msg: T) -> Event {
     let attrs: Vec<Attribute> = msg.into();
 
     Event::new(event_name).add_attributes(attrs)
@@ -23,7 +23,8 @@ impl From<GatewayEvent> for Event {
             GatewayEvent::Verifying { msg } => make_message_event("verifying", msg),
             GatewayEvent::AlreadyVerified { msg } => make_message_event("already_verified", msg),
             GatewayEvent::AlreadyRejected { msg } => make_message_event("already_rejected", msg),
-            GatewayEvent::Routing { msg } => make_message_event("routing", msg),
+            GatewayEvent::RoutingIncoming { msg } => make_message_event("routing_incoming", msg),
+            GatewayEvent::RoutingOutgoing { msg } => make_message_event("routing_outgoing", msg),
             GatewayEvent::UnfitForRouting { msg } => make_message_event("unfit_for_routing", msg),
         }
     }

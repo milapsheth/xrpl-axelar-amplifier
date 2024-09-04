@@ -293,6 +293,7 @@ dependencies = [
  "valuable-serde",
  "voting-verifier",
  "xrpl-multisig-prover",
+ "xrpl-types",
  "xrpl_http_client",
 ]
 
@@ -3910,6 +3911,7 @@ dependencies = [
  "tofn",
  "voting-verifier",
  "xrpl-multisig-prover",
+ "xrpl-types",
  "xrpl-voting-verifier",
 ]
 
@@ -9481,6 +9483,7 @@ dependencies = [
  "router-api",
  "serde",
  "serde_json",
+ "sha3",
  "thiserror",
  "xrpl-types",
  "xrpl-voting-verifier",
