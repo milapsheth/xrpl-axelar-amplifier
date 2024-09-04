@@ -2,16 +2,17 @@ use std::{collections::HashSet, str::FromStr};
 
 use axelar_wasm_std::{permission_control, FnExt};
 use axelar_wasm_std::{MajorityThreshold, VerificationStatus};
-use router_api::{Address, ChainName, CrossChainId, Message};
+use interchain_token_service::{ItsHubMessage, TokenId};
+use router_api::{ChainName, CrossChainId};
 use cosmwasm_std::{
-    entry_point, to_json_binary, wasm_execute, Addr, Binary, Deps, DepsMut, Env, Fraction,
-    HexBinary, MessageInfo, Reply, Response, StdResult, Storage, SubMsg, Uint64,
+    entry_point, to_json_binary, wasm_execute, Addr, Binary, Deps, DepsMut, Env, Fraction, HexBinary, MessageInfo, Reply, Response, StdResult, Storage, SubMsg, Uint128, Uint256, Uint64
 };
 // TODO: create custom message ID format
-use voting_verifier::events::parse_message_id;
 
 use multisig::{key::PublicKey, types::MultisigState};
+use sha3::{Keccak256, Digest};
 use xrpl_types::error::XRPLError;
+use xrpl_types::msg::XRPLMessage;
 use xrpl_types::types::*;
 
 use crate::{
@@ -173,7 +174,7 @@ pub fn execute(
             register_token(deps.storage, denom, &token, decimals)
         }
         // TODO: coin should be info.funds
-        ExecuteMsg::ConstructProof { message_id, coin } => {
+        ExecuteMsg::ConstructProof { message_id, payload } => {
             require_permissioned_relayer(&deps, info)?;
             construct_payment_proof(
                 deps.storage,
@@ -182,7 +183,7 @@ pub fn execute(
                 env.block.height,
                 &config,
                 message_id,
-                &coin,
+                payload,
             )
         }
         ExecuteMsg::UpdateVerifierSet {} => {
@@ -226,12 +227,12 @@ fn construct_payment_proof(
     block_height: u64,
     config: &Config,
     message_id: CrossChainId,
-    coin: &cosmwasm_std::Coin,
+    payload: HexBinary,
 ) -> Result<Response, ContractError> {
     // if info.funds.len() != 1 {
-    if coin.amount == cosmwasm_std::Uint128::zero() {
-        return Err(ContractError::InvalidPaymentAmount);
-    }
+    // if coin.amount == cosmwasm_std::Uint128::zero() {
+    //     return Err(ContractError::InvalidPaymentAmount);
+    // }
 
     // Prevent creating a duplicate signing session before the previous one expires
     if let Some(multisig_session_id) =
@@ -248,22 +249,47 @@ fn construct_payment_proof(
     };
 
     let message = querier.get_message(&message_id)?;
-    let xrpl_payment_amount = if coin.denom == config.xrp_denom {
+    if message.payload_hash.as_slice() != Keccak256::digest(payload.clone()).as_slice() {
+        return Err(ContractError::InvalidPayload);
+    }
+
+    let its_hub_message = ItsHubMessage::abi_decode(payload.as_slice()).unwrap();
+
+    let its_transfer = match its_hub_message {
+        ItsHubMessage::SendToHub { .. } => {
+            Err(ContractError::InvalidPayload)
+        },
+        ItsHubMessage::ReceiveFromHub { source_chain, message } => {
+            match message {
+                interchain_token_service::ItsMessage::InterchainTransfer { token_id, source_address, destination_address, amount, data } => {
+                    Ok((token_id, source_address, destination_address, amount, data))
+                },
+                interchain_token_service::ItsMessage::DeployInterchainToken { .. } |
+                interchain_token_service::ItsMessage::DeployTokenManager { .. } => {
+                    Err(ContractError::InvalidPayload)
+                },
+            }
+        }
+    }?;
+
+    let (token_id, source_address, destination_address, amount, data) = its_transfer;
+    let amount = Uint128::try_from(amount).unwrap();
+    let xrpl_payment_amount = if token_id == config.xrp_denom {
         let drops =
-            u64::try_from(coin.amount.u128()).map_err(|_| ContractError::InvalidAmount {
+            u64::try_from(amount.u128()).map_err(|_| ContractError::InvalidAmount {
                 reason: "overflow".to_string(),
             })?;
         XRPLPaymentAmount::Drops(drops)
     } else {
-        let (xrpl_token, decimals) = TOKENS.load(storage, &coin.denom)?;
+        let (xrpl_token, decimals) = TOKENS.load(storage, &HexBinary::from(<[u8; 32]>::from(token_id)).to_string())?;
         // TODO: handle decimal precision conversion between CosmWasm Coin and XRPLToken
-        XRPLPaymentAmount::Token(xrpl_token, canonicalize_coin_amount(coin.amount, decimals)?)
+        XRPLPaymentAmount::Token(xrpl_token, canonicalize_coin_amount(amount, decimals)?)
     };
 
     let tx_hash = xrpl_multisig::issue_payment(
         storage,
         config,
-        message.destination_address.to_string().try_into()?,
+        destination_address.to_string().try_into()?,
         &xrpl_payment_amount,
         &message_id,
     )?;
@@ -455,29 +481,13 @@ fn update_tx_status(
     config: &Config,
     multisig_session_id: &Uint64,
     signer_public_keys: &[PublicKey],
-    message_id: &CrossChainId,
+    message_id: &TxHash,
     status: VerificationStatus,
 ) -> Result<Response, ContractError> {
     let unsigned_tx_hash =
         MULTISIG_SESSION_ID_TO_TX_HASH.load(storage, multisig_session_id.u64())?;
     let tx_info = TRANSACTION_INFO.load(storage, &unsigned_tx_hash)?;
     let multisig_session = querier.get_multisig_session(multisig_session_id)?;
-
-    let destination_str = match &tx_info.unsigned_contents {
-        XRPLUnsignedTx::Payment(p) => p.destination.to_string(),
-        _ => config.xrpl_multisig.to_string(),
-    };
-
-    // TODO: custom verify_tx_hash on XRPL voting verifier
-    let message = Message {
-        destination_chain: ChainName::from_str(XRPL_CHAIN_NAME).unwrap(),
-        source_address: Address::from_str(&config.xrpl_multisig.to_string())
-            .map_err(|_| ContractError::InvalidAddress)?,
-        destination_address: Address::from_str(destination_str.as_ref())
-            .map_err(|_| ContractError::InvalidAddress)?,
-        cc_id: message_id.clone(),
-        payload_hash: [0; 32],
-    };
 
     let xrpl_signers: Vec<XRPLSigner> = multisig_session
         .verifier_set
@@ -496,17 +506,11 @@ fn update_tx_status(
     let tx_blob = HexBinary::from(signed_tx.xrpl_serialize()?);
     let tx_hash: HexBinary = xrpl_multisig::compute_signed_tx_hash(tx_blob.as_slice())?.into();
 
-    if parse_message_id(&message_id.clone().message_id, &XRPL_MESSAGE_ID_FORMAT)
-        .map_err(|_| ContractError::InvalidMessageID(message_id.message_id.to_string()))?
-        .0
-        .to_string()
-        .strip_prefix("0x")
-        .unwrap()
-        != tx_hash.to_string()
-    {
-        return Err(ContractError::InvalidMessageID(message_id.message_id.to_string()));
+    if message_id.0 != tx_hash {
+        return Err(ContractError::InvalidMessageID(message_id.0.to_string()));
     }
 
+    let message = XRPLMessage::ProverMessage(message_id.0.to_vec().try_into().unwrap());
     let actual_status = querier.get_message_status(message)?;
     if status != actual_status {
         return Err(ContractError::InvalidMessageStatus);

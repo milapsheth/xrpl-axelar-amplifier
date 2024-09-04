@@ -1,4 +1,4 @@
-use router_api::{Address, CrossChainId, Message, ChainName};
+use router_api::ChainName;
 use cosmwasm_std::{Addr, HexBinary};
 use axelar_wasm_std::VerificationStatus;
 use cw_multi_test::Executor;
@@ -11,6 +11,7 @@ use test_utils::{
     create_new_verifiers_vec, multisig_session_id, register_in_service_registry,
     register_verifiers, rotate_active_verifier_set, Verifier,
 };
+use xrpl_types::msg::XRPLMessage;
 
 pub mod test_utils;
 
@@ -167,22 +168,15 @@ fn xrpl_verifier_set_can_be_initialized_and_then_manually_updated() {
     ));
     println!("SignerListSet proof: {:?}", proof);
 
-    let xrpl_multisig_address = "rfEf91bLxrTVC76vw1W3Ur8Jk4Lwujskmb".to_string(); // TODO: fix duplicate definition
-    let proof_msgs = vec![Message {
-        destination_chain: xrpl.chain_name.clone(),
-        source_address: Address::try_from(xrpl_multisig_address.clone()).unwrap(),
-        destination_address: Address::try_from(xrpl_multisig_address).unwrap(),
-        cc_id: CrossChainId {
-            source_chain: xrpl.chain_name.clone().into(),
-            message_id: "0x166c19755f7dc98738709f1336992b95dae1871fd2af26bfe1b125c0250ffeef-0"
-                .to_string()
-                .try_into()
-                .unwrap(),
-        },
-        payload_hash: [0; 32],
-    }];
+    let proof_msgs = vec![XRPLMessage::ProverMessage(
+        HexBinary::from_hex("166c19755f7dc98738709f1336992b95dae1871fd2af26bfe1b125c0250ffeef")
+        .unwrap()
+        .as_slice()
+        .try_into()
+        .unwrap(),
+    )];
 
-    let (poll_id, expiry) = test_utils::verify_messages(
+    let (poll_id, expiry) = test_utils::verify_xrpl_messages(
         &mut protocol.app,
         &xrpl.gateway,
         &proof_msgs
@@ -202,7 +196,7 @@ fn xrpl_verifier_set_can_be_initialized_and_then_manually_updated() {
         &xrpl.multisig_prover,
         initial_verifiers.iter().map(|w| (KeyType::Ecdsa, HexBinary::from(w.key_pair.encoded_verifying_key())).try_into().unwrap()).collect(),
         session_id,
-        proof_msgs[0].cc_id.clone(),
+        proof_msgs[0].tx_id(),
         VerificationStatus::SucceededOnSourceChain
     );
 

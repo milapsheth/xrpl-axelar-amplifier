@@ -5,7 +5,8 @@ use router_api::{ChainName, CrossChainId, Message};
 use cosmwasm_schema::serde::{de::DeserializeOwned, Serialize};
 use cosmwasm_std::{to_json_binary, QuerierWrapper, QueryRequest, Uint64, WasmQuery};
 use multisig::{key::PublicKey, multisig::Multisig};
-use voting_verifier::msg::MessageStatus;
+use xrpl_voting_verifier::msg::MessageStatus;
+use xrpl_types::msg::XRPLMessage;
 
 use crate::{error::ContractError, state::Config};
 
@@ -88,12 +89,12 @@ impl<'a> Querier<'a> {
 
     pub fn get_message_status(
         &self,
-        message: Message,
+        message: XRPLMessage,
     ) -> Result<VerificationStatus, ContractError> {
         let messages_status: Vec<MessageStatus> = query(
             self.querier,
             self.config.voting_verifier.to_string(),
-            &voting_verifier::msg::QueryMsg::MessagesStatus(
+            &xrpl_voting_verifier::msg::QueryMsg::MessagesStatus(
                 vec![message],
             ),
         )?;
@@ -111,18 +112,6 @@ impl<'a> Querier<'a> {
         query(
             self.querier,
             self.config.axelar_multisig.to_string(),
-            &query_msg,
-        )
-    }
-
-    pub fn get_verifier_set_status(
-        &self,
-        verifier_set: &crate::axelar_workers::VerifierSet,
-    ) -> Result<VerificationStatus, ContractError> {
-        let query_msg = voting_verifier::msg::QueryMsg::VerifierSetStatus(verifier_set.clone().into());
-        query(
-            self.querier,
-            self.config.voting_verifier.to_string(),
             &query_msg,
         )
     }

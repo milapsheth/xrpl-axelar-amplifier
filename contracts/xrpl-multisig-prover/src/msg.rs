@@ -1,4 +1,5 @@
 use axelar_wasm_std::{MajorityThreshold, VerificationStatus};
+use interchain_token_service::TokenId;
 use router_api::CrossChainId;
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::{HexBinary, Uint64};
@@ -25,7 +26,7 @@ pub struct InstantiateMsg {
     pub last_assigned_ticket_number: u32,
     pub governance_address: String,
     pub relayer_address: String, // TODO: REMOVE
-    pub xrp_denom: String,
+    pub xrp_denom: TokenId,
 }
 
 #[cw_serde]
@@ -69,15 +70,14 @@ pub enum ExecuteMsg {
         token: XRPLToken,
         decimals: u8,
     },
-    // TODO: remove coin parameter
     ConstructProof {
         message_id: CrossChainId,
-        coin: cosmwasm_std::Coin,
+        payload: HexBinary,
     },
     UpdateTxStatus {
         multisig_session_id: Uint64,
         signer_public_keys: Vec<PublicKey>,
-        message_id: CrossChainId,
+        message_id: TxHash,
         message_status: VerificationStatus,
     },
     UpdateVerifierSet,

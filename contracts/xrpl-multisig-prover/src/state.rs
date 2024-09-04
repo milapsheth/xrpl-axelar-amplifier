@@ -1,5 +1,6 @@
 use crate::axelar_workers::VerifierSet;
 use axelar_wasm_std::MajorityThreshold;
+use interchain_token_service::TokenId;
 use router_api::CrossChainId;
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::Addr;
@@ -23,7 +24,7 @@ pub struct Config {
     pub xrpl_fee: u64,
     pub ticket_count_threshold: u32,
     pub key_type: multisig::key::KeyType,
-    pub xrp_denom: String,
+    pub xrp_denom: TokenId, // TODO: rename
 }
 
 pub const CONFIG: Item<Config> = Item::new("config");

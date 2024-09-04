@@ -134,6 +134,9 @@ pub enum ContractError {
 
     #[error("generic error {0}")]
     GenericError(String),
+
+    #[error("invalid payload")]
+    InvalidPayload,
 }
 
 impl From<ContractError> for StdError {

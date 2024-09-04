@@ -1,8 +1,9 @@
 use axelar_wasm_std::VerificationStatus;
-use router_api::{Address, CrossChainId, Message};
+use router_api::{CrossChainId, Message};
 use cosmwasm_std::{Addr, Coin, HexBinary, Uint128};
 use multisig::key::KeyType;
 use integration_tests::contract::Contract;
+use xrpl_types::msg::XRPLMessage;
 
 use crate::test_utils::{ETH_DENOMINATION, AXL_DENOMINATION};
 
@@ -139,22 +140,15 @@ fn xrpl_ticket_create_can_be_proven() {
     ));
     println!("TicketCreate proof: {:?}", proof);
 
-    let xrpl_multisig_address = "rfEf91bLxrTVC76vw1W3Ur8Jk4Lwujskmb".to_string(); // TODO: fix duplicate definition
-    let proof_msgs = vec![Message {
-        destination_chain: xrpl.chain_name.clone(),
-        source_address: Address::try_from(xrpl_multisig_address.clone()).unwrap(),
-        destination_address: Address::try_from(xrpl_multisig_address).unwrap(),
-        cc_id: CrossChainId {
-            source_chain: xrpl.chain_name.clone().into(),
-            message_id: "0x9c2f220fe5ee650b3cd10b0a72af1206b3912afce8376214234354180198c5d5-0"
-                .to_string()
-                .try_into()
-                .unwrap(),
-        },
-        payload_hash: [0; 32],
-    }];
+    let proof_msgs = vec![XRPLMessage::ProverMessage(
+        HexBinary::from_hex("9c2f220fe5ee650b3cd10b0a72af1206b3912afce8376214234354180198c5d5")
+        .unwrap()
+        .as_slice()
+        .try_into()
+        .unwrap(),
+    )];
 
-    let (poll_id, expiry) = test_utils::verify_messages(
+    let (poll_id, expiry) = test_utils::verify_xrpl_messages(
         &mut protocol.app,
         &xrpl.gateway,
         &proof_msgs,
@@ -174,7 +168,7 @@ fn xrpl_ticket_create_can_be_proven() {
         &xrpl.multisig_prover,
         workers.iter().map(|w| (KeyType::Ecdsa, HexBinary::from(w.key_pair.encoded_verifying_key())).try_into().unwrap()).collect(),
         session_id,
-        proof_msgs[0].cc_id.clone(),
+        proof_msgs[0].tx_id(),
         VerificationStatus::SucceededOnSourceChain
     );
 }
@@ -229,7 +223,7 @@ fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
 
     // check that the message can be found at the outgoing gateway
     let found_msgs =
-        test_utils::messages_from_gateway(&mut protocol.app, &xrpl.gateway, &msg_ids);
+        test_utils::messages_from_xrpl_gateway(&mut protocol.app, &xrpl.gateway, &msg_ids);
     assert_eq!(found_msgs, msgs);
 
     // trigger signing and submit all necessary signatures
@@ -258,22 +252,15 @@ fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
         xrpl_multisig_prover::msg::GetProofResponse::Completed { .. }
     ));
 
-    let xrpl_multisig_address = "rfEf91bLxrTVC76vw1W3Ur8Jk4Lwujskmb".to_string(); // TODO: fix duplicate definition
-    let proof_msgs = vec![Message {
-        destination_chain: xrpl.chain_name.clone(),
-        source_address: Address::try_from(xrpl_multisig_address).unwrap(),
-        destination_address: Address::try_from("raNVNWvhUQzFkDDTdEw3roXRJfMJFVJuQo".to_string()).unwrap(),
-        cc_id: CrossChainId {
-            source_chain: xrpl.chain_name.clone().into(),
-            message_id: "0xc5c80adaff8703e589988f68587535d5c5cac5a7d7b99f0507aee3de40201137-0"
-                .to_string()
-                .try_into()
-                .unwrap(),
-        },
-        payload_hash: [0; 32],
-    }];
+    let proof_msgs = vec![XRPLMessage::ProverMessage(
+        HexBinary::from_hex("c5c80adaff8703e589988f68587535d5c5cac5a7d7b99f0507aee3de40201137")
+        .unwrap()
+        .as_slice()
+        .try_into()
+        .unwrap(),
+    )];
 
-    let (poll_id, expiry) = test_utils::verify_messages(
+    let (poll_id, expiry) = test_utils::verify_xrpl_messages(
         &mut protocol.app,
         &xrpl.gateway,
         &proof_msgs
@@ -293,7 +280,7 @@ fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
         &xrpl.multisig_prover,
         workers.iter().map(|w| (KeyType::Ecdsa, HexBinary::from(w.key_pair.encoded_verifying_key())).try_into().unwrap()).collect(),
         session_id,
-        proof_msgs[0].cc_id.clone(),
+        proof_msgs[0].tx_id(),
         VerificationStatus::SucceededOnSourceChain
     );
 

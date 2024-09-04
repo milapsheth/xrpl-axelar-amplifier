@@ -7,7 +7,7 @@ use axelar_wasm_std::{
     VerificationStatus,
 };
 use router_api::{Address, ChainName, CrossChainId, GatewayDirection, Message};
-use xrpl_types::types::{XRPLAccountId, XRPLToken, XRPL_MESSAGE_ID_FORMAT};
+use xrpl_types::{msg::{XRPLHash, XRPLMessage}, types::{XRPLAccountId, XRPLToken, XRPL_MESSAGE_ID_FORMAT}};
 use std::collections::{HashMap, HashSet};
 
 use axelar_wasm_std::msg_id::HexTxHashAndEventIndex;
@@ -16,7 +16,7 @@ use cosmwasm_std::{
     coins, Addr, Attribute, BlockInfo, Coin, Event, HexBinary, StdError, Uint128, Uint64
 };
 use cw_multi_test::{App, AppResponse, Executor};
-use integration_tests::{contract::Contract, voting_verifier_contract::VotingContract};
+use integration_tests::{contract::Contract, voting_verifier_contract::VotingContract, xrpl_gateway_contract::XRPLGatewayContract};
 use integration_tests::coordinator_contract::CoordinatorContract;
 use integration_tests::gateway_contract::GatewayContract;
 use integration_tests::multisig_contract::MultisigContract;
@@ -84,12 +84,36 @@ pub fn verify_messages(
     (poll_id, expiry)
 }
 
+pub fn verify_xrpl_messages(
+    app: &mut App,
+    gateway: &XRPLGatewayContract,
+    msgs: &[XRPLMessage],
+) -> (PollId, PollExpiryBlock) {
+    let response = gateway.execute(
+        app,
+        Addr::unchecked("relayer"),
+        &xrpl_gateway::msg::ExecuteMsg::VerifyMessages(msgs.to_vec()),
+    );
+    assert!(response.is_ok());
+
+    let response = response.unwrap();
+
+    let poll_id = find_event_attribute(&response.events, "wasm-messages_poll_started", "poll_id")
+        .map(|attr| serde_json::from_str(&attr.value).unwrap())
+        .expect("couldn't get poll_id");
+    let expiry = find_event_attribute(&response.events, "wasm-messages_poll_started", "expires_at")
+        .map(|attr| attr.value.as_str().parse().unwrap())
+        .expect("couldn't get poll expiry");
+    (poll_id, expiry)
+}
+
 pub fn route_messages(app: &mut App, gateway: &GatewayContract, msgs: &[Message]) {
     let response = gateway.execute(
         app,
         Addr::unchecked("relayer"),
         &gateway_api::msg::ExecuteMsg::RouteMessages(msgs.to_vec()),
     );
+    println!("response: {:?}", response);
     assert!(response.is_ok());
 }
 
@@ -384,6 +408,20 @@ pub fn messages_from_gateway(
     query_response.unwrap()
 }
 
+pub fn messages_from_xrpl_gateway(
+    app: &mut App,
+    gateway: &XRPLGatewayContract,
+    message_ids: &[CrossChainId],
+) -> Vec<Message> {
+    let query_response: Result<Vec<Message>, StdError> = gateway.query(
+        app,
+        &xrpl_gateway::msg::QueryMsg::OutgoingMessages(message_ids.to_owned()),
+    );
+    assert!(query_response.is_ok());
+
+    query_response.unwrap()
+}
+
 pub fn proof(
     app: &mut App,
     multisig_prover: &MultisigProverContract,
@@ -444,7 +482,7 @@ pub fn xrpl_update_tx_status(
     multisig_prover: &XRPLMultisigProverContract,
     signer_public_keys: Vec<PublicKey>,
     multisig_session_id: Uint64,
-    message_id: CrossChainId,
+    message_id: XRPLHash, // TODO: use TxHash from xrpl_multisig_prover
     message_status: VerificationStatus,
 ) {
     let response = multisig_prover.execute(
@@ -453,10 +491,11 @@ pub fn xrpl_update_tx_status(
         &xrpl_multisig_prover::msg::ExecuteMsg::UpdateTxStatus {
             message_status,
             multisig_session_id,
-            message_id,
+            message_id: HexBinary::from(message_id).into(),
             signer_public_keys,
         },
     );
+    println!("response: {:?}", response);
     assert!(response.is_ok());
 }
 
@@ -836,7 +875,7 @@ pub struct Chain {
 
 #[derive(Clone)]
 pub struct XRPLChain {
-    pub gateway: GatewayContract,
+    pub gateway: XRPLGatewayContract,
     pub voting_verifier: XRPLVotingVerifierContract,
     pub multisig_prover: XRPLMultisigProverContract,
     pub chain_name: ChainName,
@@ -975,6 +1014,7 @@ pub fn register_xrpl_token(
 
 pub fn setup_xrpl(protocol: &mut Protocol, verifiers: &[Verifier]) -> XRPLChain {
     let chain_name = ChainName::from_str("XRPL").unwrap();
+    let axelar_chain_name = ChainName::from_str("axelar").unwrap();
 
     let voting_verifier = XRPLVotingVerifierContract::instantiate_contract(
         protocol,
@@ -982,10 +1022,13 @@ pub fn setup_xrpl(protocol: &mut Protocol, verifiers: &[Verifier]) -> XRPLChain 
         Threshold::try_from((9, 10)).unwrap().try_into().unwrap(),
     );
 
-    let gateway= GatewayContract::instantiate_contract(
+    let its_hub_address = Addr::unchecked("its_hub"); // TODO
+    let gateway= XRPLGatewayContract::instantiate_contract(
         &mut protocol.app,
         protocol.router.contract_address().clone(),
         voting_verifier.contract_addr.clone(),
+        its_hub_address,
+        axelar_chain_name,
     );
 
     let xrpl_multisig_address = "rfEf91bLxrTVC76vw1W3Ur8Jk4Lwujskmb".to_string(); // TODO: fix duplicate definition
@@ -1231,6 +1274,8 @@ pub fn setup_xrpl_destination_test_case() -> (Protocol, Chain, XRPLChain, Vec<Ve
     register_verifiers(&mut protocol, &verifiers, min_verifier_bond);
     let source_chain = setup_chain(&mut protocol, chains.first().unwrap().clone(), &verifiers);
     let xrpl = setup_xrpl(&mut protocol, &verifiers);
+    println!("source_chain: {:?} {:?}", source_chain.chain_name, source_chain.gateway.contract_address());
+    println!("xrpl: {:?} {:?}", xrpl.chain_name, xrpl.gateway.contract_address());
     (protocol, source_chain, xrpl, verifiers, min_verifier_bond)
 }
 
