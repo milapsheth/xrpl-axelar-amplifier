@@ -54,6 +54,8 @@ voting-verifier = { workspace = true }
 xrpl-voting-verifier = { workspace = true }
 xrpl-gateway = { workspace = true }
 xrpl-types = { workspace = true }
+interchain-token-service = { workspace = true }
+ethers-core = { workspace = true }
 
 [lints]
 workspace = true

@@ -7,13 +7,14 @@ use axelar_wasm_std::{
     VerificationStatus,
 };
 use router_api::{Address, ChainName, CrossChainId, GatewayDirection, Message};
+use xrpl_multisig_prover::querier::XRPL_CHAIN_NAME;
 use xrpl_types::{msg::{XRPLHash, XRPLMessage}, types::{XRPLAccountId, XRPLToken, XRPL_MESSAGE_ID_FORMAT}};
 use std::collections::{HashMap, HashSet};
 
 use axelar_wasm_std::msg_id::HexTxHashAndEventIndex;
 use coordinator::msg::ExecuteMsg as CoordinatorExecuteMsg;
 use cosmwasm_std::{
-    coins, Addr, Attribute, BlockInfo, Coin, Event, HexBinary, StdError, Uint128, Uint64
+    coins, Addr, Attribute, BlockInfo, Event, HexBinary, StdError, Uint128, Uint64
 };
 use cw_multi_test::{App, AppResponse, Executor};
 use integration_tests::{contract::Contract, voting_verifier_contract::VotingContract, xrpl_gateway_contract::XRPLGatewayContract};
@@ -41,10 +42,12 @@ use service_registry::msg::ExecuteMsg;
 use tofn::ecdsa::KeyPair;
 
 pub const AXL_DENOMINATION: &str = "uaxl";
-pub const XRP_DENOMINATION: &str = "uxrp";
-pub const ETH_DENOMINATION: &str = "ueth";
+pub const XRP_TOKEN_ID: [u8; 32] = [0; 32];
+pub const ETH_TOKEN_ID: [u8; 32] = [1; 32];
 
 pub const SIGNATURE_BLOCK_EXPIRY: u64 = 100;
+
+pub const AXELAR_CHAIN_NAME: &str = "Axelarnet";
 
 fn find_event_attribute<'a>(
     events: &'a [Event],
@@ -71,6 +74,7 @@ pub fn verify_messages(
         Addr::unchecked("relayer"),
         &gateway_api::msg::ExecuteMsg::VerifyMessages(msgs.to_vec()),
     );
+    println!("response: {:?}", response);
     assert!(response.is_ok());
 
     let response = response.unwrap();
@@ -316,16 +320,15 @@ pub fn construct_xrpl_payment_proof_and_sign(
     multisig_prover: &XRPLMultisigProverContract,
     message: Message,
     verifiers: &Vec<Verifier>,
-    coins: &[Coin],
+    payload: HexBinary,
 ) -> Uint64 {
     let response = multisig_prover.execute(
         &mut protocol.app,
         Addr::unchecked("relayer"),
         &xrpl_multisig_prover::msg::ExecuteMsg::ConstructProof {
             message_id: message.cc_id.clone(),
-            coin: coins.to_vec().get(0).unwrap().clone(), // TODO: remove
+            payload,
         },
-        // coins,
     );
     assert!(response.is_ok());
     let response = response.unwrap();
@@ -535,22 +538,14 @@ pub fn distribute_rewards(protocol: &mut Protocol, chain_name: &ChainName, contr
 
 pub fn setup_protocol(service_name: nonempty::String) -> Protocol {
     let genesis = Addr::unchecked("genesis");
-    // TODO: return relayer
-    let relayer = Addr::unchecked("relayer");
-    let xrpl_init_coins = vec![
-        coins(u128::MAX, XRP_DENOMINATION),
-        coins(u128::MAX, ETH_DENOMINATION),
-    ].concat();
     let mut app = App::new(|router, _, storage| {
         router
             .bank
             .init_balance(
                 storage,
                 &genesis,
-                vec![
-                    coins(u128::MAX, AXL_DENOMINATION),
-                    xrpl_init_coins.clone(),
-                ].concat())
+                coins(u128::MAX, AXL_DENOMINATION),
+            )
             .unwrap();
     });
     let admin_address = Addr::unchecked("admin");
@@ -870,6 +865,7 @@ pub struct Chain {
     pub gateway: GatewayContract,
     pub voting_verifier: VotingVerifierContract,
     pub multisig_prover: MultisigProverContract,
+    pub its_address: Address,
     pub chain_name: ChainName,
 }
 
@@ -985,18 +981,20 @@ pub fn setup_chain(
     );
     assert!(response.is_ok());
 
+    let its_address = Address::from_str("0x5CC2992f2d9ab5a74935CD1295E00bbF2CE282b2").unwrap(); // TODO
     Chain {
         gateway,
         voting_verifier,
         multisig_prover,
         chain_name,
+        its_address,
     }
 }
 
 pub fn register_xrpl_token(
     protocol: &mut Protocol,
     multisig_prover: &XRPLMultisigProverContract,
-    denom: String,
+    token_id: HexBinary,
     token: XRPLToken,
     decimals: u8,
 ) {
@@ -1004,7 +1002,7 @@ pub fn register_xrpl_token(
         &mut protocol.app,
         protocol.governance_address.clone(),
         &xrpl_multisig_prover::msg::ExecuteMsg::RegisterToken {
-            denom,
+            token_id,
             token,
             decimals,
         },
@@ -1013,8 +1011,8 @@ pub fn register_xrpl_token(
 }
 
 pub fn setup_xrpl(protocol: &mut Protocol, verifiers: &[Verifier]) -> XRPLChain {
-    let chain_name = ChainName::from_str("XRPL").unwrap();
-    let axelar_chain_name = ChainName::from_str("axelar").unwrap();
+    let chain_name = ChainName::from_str(XRPL_CHAIN_NAME).unwrap();
+    let axelar_chain_name = ChainName::from_str(AXELAR_CHAIN_NAME).unwrap();
 
     let voting_verifier = XRPLVotingVerifierContract::instantiate_contract(
         protocol,
@@ -1022,12 +1020,12 @@ pub fn setup_xrpl(protocol: &mut Protocol, verifiers: &[Verifier]) -> XRPLChain 
         Threshold::try_from((9, 10)).unwrap().try_into().unwrap(),
     );
 
-    let its_hub_address = Addr::unchecked("its_hub"); // TODO
+    let axelar_its_hub_address = Addr::unchecked("its_hub"); // TODO
     let gateway= XRPLGatewayContract::instantiate_contract(
         &mut protocol.app,
         protocol.router.contract_address().clone(),
         voting_verifier.contract_addr.clone(),
-        its_hub_address,
+        axelar_its_hub_address,
         axelar_chain_name,
     );
 
@@ -1039,6 +1037,7 @@ pub fn setup_xrpl(protocol: &mut Protocol, verifiers: &[Verifier]) -> XRPLChain 
         gateway.contract_addr.clone(),
         voting_verifier.contract_addr.clone(),
         xrpl_multisig_address.clone(),
+        XRP_TOKEN_ID,
         //chain_name.to_string(),
 
         /*voting_verifier_address: voting_verifier_address.to_string(),
@@ -1062,7 +1061,7 @@ pub fn setup_xrpl(protocol: &mut Protocol, verifiers: &[Verifier]) -> XRPLChain 
     register_xrpl_token(
         protocol,
         &multisig_prover,
-        ETH_DENOMINATION.to_string(),
+        ETH_TOKEN_ID.as_slice().into(),
         XRPLToken {
             issuer: XRPLAccountId::from_str(xrpl_multisig_address.as_str()).unwrap(),
             currency: "ETH".to_string().try_into().unwrap(),
@@ -1261,6 +1260,7 @@ pub fn setup_xrpl_destination_test_case() -> (Protocol, Chain, XRPLChain, Vec<Ve
     let mut protocol = setup_protocol("validators".to_string().try_into().unwrap());
     let chains = vec![
         "Ethereum".to_string().try_into().unwrap(),
+        // "Axelarnet".to_string().try_into().unwrap(),
         "XRPL".to_string().try_into().unwrap(),
     ];
     let verifiers = create_new_verifiers_vec(
@@ -1273,6 +1273,7 @@ pub fn setup_xrpl_destination_test_case() -> (Protocol, Chain, XRPLChain, Vec<Ve
 
     register_verifiers(&mut protocol, &verifiers, min_verifier_bond);
     let source_chain = setup_chain(&mut protocol, chains.first().unwrap().clone(), &verifiers);
+    // let axelarnet = setup_axelarnet(&mut protocol, &verifiers);
     let xrpl = setup_xrpl(&mut protocol, &verifiers);
     println!("source_chain: {:?} {:?}", source_chain.chain_name, source_chain.gateway.contract_address());
     println!("xrpl: {:?} {:?}", xrpl.chain_name, xrpl.gateway.contract_address());

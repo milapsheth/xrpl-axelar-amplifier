@@ -26,7 +26,7 @@ pub struct InstantiateMsg {
     pub last_assigned_ticket_number: u32,
     pub governance_address: String,
     pub relayer_address: String, // TODO: REMOVE
-    pub xrp_denom: TokenId,
+    pub xrp_token_id: TokenId, // TODO: REMOVE
 }
 
 #[cw_serde]
@@ -66,7 +66,7 @@ pub enum GetProofResponse {
 #[cw_serde]
 pub enum ExecuteMsg {
     RegisterToken {
-        denom: String,
+        token_id: HexBinary,
         token: XRPLToken,
         decimals: u8,
     },

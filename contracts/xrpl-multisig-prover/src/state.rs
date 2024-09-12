@@ -3,7 +3,7 @@ use axelar_wasm_std::MajorityThreshold;
 use interchain_token_service::TokenId;
 use router_api::CrossChainId;
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::Addr;
+use cosmwasm_std::{Addr, HexBinary};
 use cw_storage_plus::{Item, Map};
 use xrpl_types::types::*;
 
@@ -24,7 +24,7 @@ pub struct Config {
     pub xrpl_fee: u64,
     pub ticket_count_threshold: u32,
     pub key_type: multisig::key::KeyType,
-    pub xrp_denom: TokenId, // TODO: rename
+    pub xrp_token_id: TokenId, // TODO: remove
 }
 
 pub const CONFIG: Item<Config> = Item::new("config");

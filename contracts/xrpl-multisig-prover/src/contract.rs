@@ -101,7 +101,7 @@ fn make_config(
         xrpl_fee: msg.xrpl_fee,
         ticket_count_threshold: msg.ticket_count_threshold,
         key_type: multisig::key::KeyType::Ecdsa,
-        xrp_denom: msg.xrp_denom,
+        xrp_token_id: msg.xrp_token_id,
     })
 }
 
@@ -131,11 +131,12 @@ pub fn require_permissioned_relayer(
 
 fn register_token(
     storage: &mut dyn Storage,
-    denom: String,
+    token_id: HexBinary,
     token: &XRPLToken,
     decimals: u8,
 ) -> Result<Response, ContractError> {
-    TOKENS.save(storage, &denom, &(token.clone(), decimals))?;
+    // Validate token_id
+    TOKENS.save(storage, &token_id.to_string(), &(token.clone(), decimals))?;
     Ok(Response::default())
 }
 
@@ -165,13 +166,13 @@ pub fn execute(
 
     let res = match msg {
         ExecuteMsg::RegisterToken {
-            denom,
+            token_id,
             token,
             decimals,
         } => {
             require_admin(&deps, info.clone())
                 .or_else(|_| require_governance(&deps, info.clone()))?;
-            register_token(deps.storage, denom, &token, decimals)
+            register_token(deps.storage, token_id, &token, decimals)
         }
         // TODO: coin should be info.funds
         ExecuteMsg::ConstructProof { message_id, payload } => {
@@ -274,7 +275,7 @@ fn construct_payment_proof(
 
     let (token_id, source_address, destination_address, amount, data) = its_transfer;
     let amount = Uint128::try_from(amount).unwrap();
-    let xrpl_payment_amount = if token_id == config.xrp_denom {
+    let xrpl_payment_amount = if token_id == config.xrp_token_id {
         let drops =
             u64::try_from(amount.u128()).map_err(|_| ContractError::InvalidAmount {
                 reason: "overflow".to_string(),

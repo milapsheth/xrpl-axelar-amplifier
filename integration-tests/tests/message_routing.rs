@@ -1,11 +1,18 @@
+use std::str::FromStr;
+
 use axelar_wasm_std::VerificationStatus;
-use router_api::{CrossChainId, Message};
-use cosmwasm_std::{Addr, Coin, HexBinary, Uint128};
+use router_api::{Address, ChainName, CrossChainId, Message};
+use cosmwasm_std::{Addr, HexBinary, Uint128, Uint256};
 use multisig::key::KeyType;
 use integration_tests::contract::Contract;
+use test_utils::{AXELAR_CHAIN_NAME, ETH_TOKEN_ID, XRP_TOKEN_ID};
 use xrpl_types::msg::XRPLMessage;
+use interchain_token_service::{ItsHubMessage, ItsMessage};
+use ethers_core::{abi::{encode as abi_encode, Token}, utils::keccak256};
 
-use crate::test_utils::{ETH_DENOMINATION, AXL_DENOMINATION};
+use crate::test_utils::AXL_DENOMINATION;
+// TODO: move to test_utils
+const MESSAGE_TYPE_SEND_TO_HUB: u32 = 3u32;
 
 pub mod test_utils;
 
@@ -177,7 +184,37 @@ fn xrpl_ticket_create_can_be_proven() {
 fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
     let (mut protocol, source_chain, xrpl, workers, _) = test_utils::setup_xrpl_destination_test_case();
 
-    let msg = Message {
+    let source_address: Address = "0x95181d16cfb23Bc493668C17d973F061e30F2EAF"
+        .to_string()
+        .try_into()
+        .unwrap();
+
+    let destination_address: Address = "raNVNWvhUQzFkDDTdEw3roXRJfMJFVJuQo"
+        .to_string()
+        .try_into()
+        .unwrap();
+
+    let destination_chain = xrpl.chain_name.clone();
+    let amount = Uint256::from(1000000u32);
+    let data = HexBinary::from(&[]);
+
+    let interchain_transfer_msg = ItsMessage::InterchainTransfer {
+        token_id: XRP_TOKEN_ID.into(),
+        source_address: HexBinary::from(source_address.as_bytes()),
+        destination_address: HexBinary::from(destination_address.as_bytes()),
+        amount,
+        data,
+    };
+
+    let wrapped_payload = abi_encode(&[
+        Token::Uint(MESSAGE_TYPE_SEND_TO_HUB.into()),
+        Token::String(destination_chain.to_string()),
+        Token::Bytes(vec![]),
+    ]);
+
+    let axelar_chain_name = ChainName::from_str(AXELAR_CHAIN_NAME).unwrap();
+
+    let wrapped_msg = Message {
         cc_id: CrossChainId {
             source_chain: source_chain.chain_name.clone().into(),
             message_id: "0xaff42a67c474758ce97bd9b69c395c6dc6019707b400e06c30b0878a9357b2ea-3"
@@ -185,20 +222,13 @@ fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
                 .try_into()
                 .unwrap(),
         },
-        source_address: "0x95181d16cfb23Bc493668C17d973F061e30F2EAF"
-            .to_string()
-            .try_into()
-            .unwrap(),
-        destination_address: "raNVNWvhUQzFkDDTdEw3roXRJfMJFVJuQo"
-            .to_string()
-            .try_into()
-            .unwrap(),
-        destination_chain: xrpl.chain_name.clone(),
-        // TODO: payload_hash?
-        payload_hash: [0; 32],
+        source_address: source_chain.its_address,
+        destination_address: destination_address.clone(),
+        destination_chain: axelar_chain_name.clone(),
+        payload_hash: keccak256(wrapped_payload),
     };
-    let msg_id: CrossChainId = msg.cc_id.clone();
-    let msgs = vec![msg.clone()];
+    let msg_id: CrossChainId = wrapped_msg.cc_id.clone();
+    let msgs = vec![wrapped_msg.clone()];
     let msg_ids = vec![msg_id.clone()];
 
     // start the flow by submitting the message to the gateway
@@ -230,14 +260,12 @@ fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
     let session_id = test_utils::construct_xrpl_payment_proof_and_sign(
         &mut protocol,
         &xrpl.multisig_prover,
-        msg,
+        wrapped_msg,
         &workers,
-        &[Coin {
-            denom: ETH_DENOMINATION.to_string(),
-            // amount: Uint128::MAX,
-            // amount: Uint128::from(10u128.pow(29)), // scaled down to 10^17 drops = max XRP
-            amount: Uint128::from(100000000u128)
-        }],
+        ItsHubMessage::ReceiveFromHub {
+            source_chain: axelar_chain_name,
+            message: interchain_transfer_msg,
+        }.abi_encode(),
     );
 
     let proof = test_utils::get_xrpl_proof(

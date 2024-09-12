@@ -164,7 +164,7 @@ fn successful_route_outgoing() {
                 deps.as_mut(),
                 mock_env(),
                 mock_info(router, &[]), // execute with router as sender
-                ExecuteMsg::RouteOutgoingMessages(msgs.clone()),
+                ExecuteMsg::RouteMessages(msgs.clone()),
             )
             .unwrap(),
         )
@@ -279,7 +279,7 @@ fn outgoing_calls_with_duplicate_ids_should_fail() {
             deps.as_mut(),
             mock_env(),
             mock_info("sender", &[]),
-            ExecuteMsg::RouteOutgoingMessages(msgs.clone()),
+            ExecuteMsg::RouteMessages(msgs.clone()),
         );
         assert!(response.is_err());
 
@@ -287,7 +287,7 @@ fn outgoing_calls_with_duplicate_ids_should_fail() {
             deps.as_mut(),
             mock_env(),
             mock_info(router, &[]),
-            ExecuteMsg::RouteOutgoingMessages(msgs),
+            ExecuteMsg::RouteMessages(msgs),
         );
         assert!(response.is_err());
     }
@@ -305,7 +305,7 @@ fn outgoing_route_duplicate_ids_should_fail() {
             deps.as_mut(),
             mock_env(),
             mock_info("sender", &[]),
-            ExecuteMsg::RouteOutgoingMessages(msgs),
+            ExecuteMsg::RouteMessages(msgs),
         );
 
         assert!(response.is_err());
@@ -345,7 +345,7 @@ fn reject_reroute_outgoing_message_with_different_contents() {
         deps.as_mut(),
         mock_env(),
         mock_info(router, &[]),
-        ExecuteMsg::RouteOutgoingMessages(msgs.clone()),
+        ExecuteMsg::RouteMessages(msgs.clone()),
     );
     assert!(response.is_ok());
 
@@ -360,7 +360,7 @@ fn reject_reroute_outgoing_message_with_different_contents() {
         deps.as_mut(),
         mock_env(),
         mock_info(router, &[]),
-        ExecuteMsg::RouteOutgoingMessages(msgs.clone()),
+        ExecuteMsg::RouteMessages(msgs.clone()),
     );
     assert!(response.is_err_and(|err| err_contains!(
         err.report,

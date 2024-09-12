@@ -25,8 +25,9 @@ pub enum ExecuteMsg {
 
     /// Forward the given messages to the next step of the routing layer.
     /// NOTE: In our (XRPL) case, outgoing messages only, therefore they are already verified.
+    /// NOTE: Should be named RouteOutgoingMessages, but we keep the name for compatibility with the router.
     #[permission(Any)]
-    RouteOutgoingMessages(Vec<Message>),
+    RouteMessages(Vec<Message>),
 
 
     /// Forward the given messages to the next step of the routing layer.

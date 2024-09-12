@@ -139,7 +139,7 @@ mod internal {
 
         match msg {
             ExecuteMsg::VerifyMessages(msgs) => contract::execute::verify_messages(&verifier, msgs),
-            ExecuteMsg::RouteOutgoingMessages(msgs) => {
+            ExecuteMsg::RouteMessages(msgs) => {
                 if info.sender != router.address {
                     return Err(Error::RouterOnly)?;
                 }

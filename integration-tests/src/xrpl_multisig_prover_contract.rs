@@ -16,6 +16,7 @@ impl XRPLMultisigProverContract {
         gateway_address: Addr,
         voting_verifier_address: Addr,
         xrpl_multisig_address: String,
+        xrp_token_id: [u8; 32],
     ) -> Self {
         let code = ContractWrapper::new(
             xrpl_multisig_prover::contract::execute,
@@ -50,7 +51,7 @@ impl XRPLMultisigProverContract {
                         vec![],
                         (44218195..44218200).collect::<Vec<_>>()
                     ].concat(),
-                    xrp_denom: "uxrp".to_string(),
+                    xrp_token_id: xrp_token_id.into(),
                     relayer_address: Addr::unchecked("relayer").to_string(),
                 },
                 &[],
