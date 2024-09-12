@@ -314,7 +314,7 @@ fn reject_reroute_outgoing_message_with_different_contents() {
     assert!(response.is_err_and(|err| err_contains!(
         err.report,
         Error,
-        Error::MessageMismatch { .. }
+        Error::RouteOutgoingMessages
     )));
 }
 

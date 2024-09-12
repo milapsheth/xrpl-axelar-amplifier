@@ -11,13 +11,16 @@ use event_processor::EventHandler;
 use event_sub::EventSub;
 use evm::finalizer::{pick, Finalization};
 use evm::json_rpc::EthereumClient;
+use multiversx_sdk::blockchain::CommunicationProxy;
 use queue::queued_broadcaster::QueuedBroadcaster;
 use router_api::ChainName;
 use thiserror::Error;
 use tofnd::grpc::{Multisig, MultisigClient};
 use tokio::signal::unix::{signal, SignalKind};
+use tokio::sync::mpsc;
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
+use tonic::transport::Channel;
 use tracing::info;
 use types::TMAddress;
 
@@ -28,7 +31,6 @@ mod block_height_monitor;
 mod broadcaster;
 pub mod commands;
 pub mod config;
-pub mod error;
 mod event_processor;
 mod event_sub;
 mod evm;
@@ -36,6 +38,7 @@ mod grpc;
 mod handlers;
 mod health_check;
 mod json_rpc;
+mod mvx;
 mod queue;
 mod sui;
 mod tm_client;
@@ -45,6 +48,9 @@ mod url;
 mod xrpl;
 
 pub use grpc::{client, proto};
+
+use crate::asyncutil::future::RetryPolicy;
+use crate::broadcaster::confirm_tx::TxConfirmer;
 
 const PREFIX: &str = "axelar";
 const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(3);
@@ -66,23 +72,29 @@ async fn prepare_app(cfg: Config) -> Result<App<impl Broadcaster>, Error> {
     } = cfg;
 
     let tm_client = tendermint_rpc::HttpClient::new(tm_jsonrpc.to_string().as_str())
-        .change_context(Error::Connection)?;
+        .change_context(Error::Connection)
+        .attach_printable(tm_jsonrpc.clone())?;
     let service_client = ServiceClient::connect(tm_grpc.to_string())
         .await
-        .change_context(Error::Connection)?;
+        .change_context(Error::Connection)
+        .attach_printable(tm_grpc.clone())?;
     let auth_query_client = AuthQueryClient::connect(tm_grpc.to_string())
         .await
-        .change_context(Error::Connection)?;
+        .change_context(Error::Connection)
+        .attach_printable(tm_grpc.clone())?;
     let bank_query_client = BankQueryClient::connect(tm_grpc.to_string())
         .await
-        .change_context(Error::Connection)?;
-    let multisig_client = MultisigClient::new(tofnd_config.party_uid, tofnd_config.url)
+        .change_context(Error::Connection)
+        .attach_printable(tm_grpc.clone())?;
+    let multisig_client = MultisigClient::new(tofnd_config.party_uid, tofnd_config.url.clone())
         .await
-        .change_context(Error::Connection)?;
+        .change_context(Error::Connection)
+        .attach_printable(tofnd_config.url)?;
 
     let block_height_monitor = BlockHeightMonitor::connect(tm_client.clone())
         .await
-        .change_context(Error::Connection)?;
+        .change_context(Error::Connection)
+        .attach_printable(tm_jsonrpc)?;
 
     let pub_key = multisig_client
         .keygen(&tofnd_config.key_uid, tofnd::Algorithm::Ecdsa)
@@ -93,7 +105,7 @@ async fn prepare_app(cfg: Config) -> Result<App<impl Broadcaster>, Error> {
         .auth_query_client(auth_query_client)
         .bank_query_client(bank_query_client)
         .address_prefix(PREFIX.to_string())
-        .client(service_client)
+        .client(service_client.clone())
         .signer(multisig_client.clone())
         .pub_key((tofnd_config.key_uid, pub_key))
         .config(broadcast.clone())
@@ -112,6 +124,7 @@ async fn prepare_app(cfg: Config) -> Result<App<impl Broadcaster>, Error> {
     App::new(
         tm_client,
         broadcaster,
+        service_client,
         multisig_client,
         broadcast,
         event_processor.stream_buffer_size,
@@ -146,6 +159,7 @@ where
     event_subscriber: event_sub::EventSubscriber,
     event_processor: TaskGroup<event_processor::Error>,
     broadcaster: QueuedBroadcaster<T>,
+    tx_confirmer: TxConfirmer<ServiceClient<Channel>>,
     multisig_client: MultisigClient,
     block_height_monitor: BlockHeightMonitor<tendermint_rpc::HttpClient>,
     health_check_server: health_check::Server,
@@ -160,6 +174,7 @@ where
     fn new(
         tm_client: tendermint_rpc::HttpClient,
         broadcaster: T,
+        service_client: ServiceClient<Channel>,
         multisig_client: MultisigClient,
         broadcast_cfg: broadcaster::Config,
         event_buffer_cap: usize,
@@ -171,12 +186,26 @@ where
         let (event_publisher, event_subscriber) =
             event_sub::EventPublisher::new(tm_client, event_buffer_cap);
 
+        let (tx_hash_sender, tx_hash_receiver) = mpsc::channel(1000);
+        let (tx_response_sender, tx_response_receiver) = mpsc::channel(1000);
+
         let event_processor = TaskGroup::new();
         let broadcaster = QueuedBroadcaster::new(
             broadcaster,
             broadcast_cfg.batch_gas_limit,
             broadcast_cfg.queue_cap,
             interval(broadcast_cfg.broadcast_interval),
+            tx_hash_sender,
+            tx_response_receiver,
+        );
+        let tx_confirmer = TxConfirmer::new(
+            service_client,
+            RetryPolicy::RepeatConstant {
+                sleep: broadcast_cfg.tx_fetch_interval,
+                max_attempts: broadcast_cfg.tx_fetch_max_retries.saturating_add(1).into(),
+            },
+            tx_hash_receiver,
+            tx_response_sender,
         );
 
         Self {
@@ -184,6 +213,7 @@ where
             event_subscriber,
             event_processor,
             broadcaster,
+            tx_confirmer,
             multisig_client,
             block_height_monitor,
             health_check_server,
@@ -344,6 +374,32 @@ where
                     ),
                     event_processor_config.clone(),
                 ),
+                handlers::config::Config::MvxMsgVerifier {
+                    cosmwasm_contract,
+                    proxy_url,
+                } => self.create_handler_task(
+                    "mvx-msg-verifier",
+                    handlers::mvx_verify_msg::Handler::new(
+                        verifier.clone(),
+                        cosmwasm_contract,
+                        CommunicationProxy::new(proxy_url.to_string().trim_end_matches('/').into()),
+                        self.block_height_monitor.latest_block_height(),
+                    ),
+                    event_processor_config.clone(),
+                ),
+                handlers::config::Config::MvxVerifierSetVerifier {
+                    cosmwasm_contract,
+                    proxy_url,
+                } => self.create_handler_task(
+                    "mvx-worker-set-verifier",
+                    handlers::mvx_verify_verifier_set::Handler::new(
+                        verifier.clone(),
+                        cosmwasm_contract,
+                        CommunicationProxy::new(proxy_url.to_string().trim_end_matches('/').into()),
+                        self.block_height_monitor.latest_block_height(),
+                    ),
+                    event_processor_config.clone(),
+                ),
             };
             self.event_processor = self.event_processor.add_task(task);
         }
@@ -382,6 +438,7 @@ where
             event_publisher,
             event_processor,
             broadcaster,
+            tx_confirmer,
             block_height_monitor,
             health_check_server,
             token,
@@ -425,6 +482,9 @@ where
                     .change_context(Error::EventProcessor)
             }))
             .add_task(CancellableTask::create(|_| {
+                tx_confirmer.run().change_context(Error::TxConfirmation)
+            }))
+            .add_task(CancellableTask::create(|_| {
                 broadcaster.run().change_context(Error::Broadcaster)
             }))
             .run(token)
@@ -440,6 +500,8 @@ pub enum Error {
     EventProcessor,
     #[error("broadcaster failed")]
     Broadcaster,
+    #[error("tx confirmation failed")]
+    TxConfirmation,
     #[error("tofnd failed")]
     Tofnd,
     #[error("connection failed")]

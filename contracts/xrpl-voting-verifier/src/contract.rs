@@ -1,4 +1,4 @@
-use axelar_wasm_std::permission_control;
+use axelar_wasm_std::{nonempty, permission_control};
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
@@ -98,7 +98,7 @@ mod test {
         mock_dependencies, mock_env, mock_info, MockApi, MockQuerier, MockStorage,
     };
     use cosmwasm_std::{from_json, Addr, Empty, Fraction, OwnedDeps, Uint128, Uint64, WasmQuery};
-    use service_registry::state::{
+    use service_registry::{
         AuthorizationState, BondingState, Verifier, WeightedVerifier, VERIFIER_WEIGHT,
     };
     use sha3::{Digest, Keccak256};
@@ -125,7 +125,7 @@ mod test {
             verifiers.push(Verifier {
                 address: Addr::unchecked(format!("addr{}", i)),
                 bonding_state: BondingState::Bonded {
-                    amount: Uint128::from(100u128),
+                    amount: nonempty::Uint128::try_from(100u128).unwrap(),
                 },
                 authorization_state: AuthorizationState::Authorized,
                 service_name: SERVICE_NAME.parse().unwrap(),

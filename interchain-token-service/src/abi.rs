@@ -1,11 +1,10 @@
 use alloy_primitives::{FixedBytes, U256};
 use alloy_sol_types::{sol, SolValue};
-use axelar_wasm_std::FnExt;
+use axelar_wasm_std::{FnExt, IntoContractError};
 use cosmwasm_std::{HexBinary, Uint256};
-use error_stack::{Report, ResultExt};
-use router_api::ChainName;
+use error_stack::{bail, ensure, report, Report, ResultExt};
+use router_api::{ChainName, ChainNameRaw};
 
-use crate::error::Error;
 use crate::primitives::{ItsHubMessage, ItsMessage};
 use crate::{TokenId, TokenManagerType};
 
@@ -62,6 +61,18 @@ sol! {
     }
 }
 
+#[derive(thiserror::Error, Debug, PartialEq, IntoContractError)]
+pub enum Error {
+    #[error("failed to decode ITS message")]
+    InvalidMessage,
+    #[error("invalid message type")]
+    InvalidMessageType,
+    #[error("invalid chain name")]
+    InvalidChainName,
+    #[error("invalid token manager type")]
+    InvalidTokenManagerType,
+}
+
 impl ItsMessage {
     pub fn abi_encode(self) -> HexBinary {
         match self {
@@ -111,9 +122,7 @@ impl ItsMessage {
     }
 
     pub fn abi_decode(payload: &[u8]) -> Result<Self, Report<Error>> {
-        if payload.len() < 32 {
-            return Err(Report::new(Error::InvalidMessage));
-        }
+        ensure!(payload.len() >= 32, Error::InvalidMessage);
 
         let message_type = MessageType::abi_decode(&payload[0..32], true)
             .change_context(Error::InvalidMessageType)?;
@@ -123,25 +132,25 @@ impl ItsMessage {
                 let decoded = InterchainTransfer::abi_decode_params(payload, true)
                     .change_context(Error::InvalidMessage)?;
 
-                Ok(ItsMessage::InterchainTransfer {
+                ItsMessage::InterchainTransfer {
                     token_id: TokenId::new(decoded.tokenId.into()),
                     source_address: HexBinary::from(decoded.sourceAddress.to_vec()),
                     destination_address: HexBinary::from(decoded.destinationAddress.as_ref()),
                     amount: Uint256::from_le_bytes(decoded.amount.to_le_bytes()),
                     data: HexBinary::from(decoded.data.as_ref()),
-                })
+                }
             }
             MessageType::DeployInterchainToken => {
                 let decoded = DeployInterchainToken::abi_decode_params(payload, true)
                     .change_context(Error::InvalidMessage)?;
 
-                Ok(ItsMessage::DeployInterchainToken {
+                ItsMessage::DeployInterchainToken {
                     token_id: TokenId::new(decoded.tokenId.into()),
                     name: decoded.name,
                     symbol: decoded.symbol,
                     decimals: decoded.decimals,
                     minter: HexBinary::from(decoded.minter.as_ref()),
-                })
+                }
             }
             MessageType::DeployTokenManager => {
                 let decoded = DeployTokenManager::abi_decode_params(payload, true)
@@ -150,16 +159,16 @@ impl ItsMessage {
                 let token_manager_type = u8::try_from(decoded.tokenManagerType)
                     .change_context(Error::InvalidTokenManagerType)?
                     .then(TokenManagerType::from_repr)
-                    .ok_or_else(|| Report::new(Error::InvalidTokenManagerType))?;
+                    .ok_or_else(|| report!(Error::InvalidTokenManagerType))?;
 
-                Ok(ItsMessage::DeployTokenManager {
+                ItsMessage::DeployTokenManager {
                     token_id: TokenId::new(decoded.tokenId.into()),
                     token_manager_type,
                     params: HexBinary::from(decoded.params.as_ref()),
-                })
+                }
             }
-            _ => Err(Report::new(Error::InvalidMessageType)),
-        }?;
+            _ => bail!(Error::InvalidMessageType),
+        };
 
         Ok(message)
     }
@@ -192,9 +201,7 @@ impl ItsHubMessage {
     }
 
     pub fn abi_decode(payload: &[u8]) -> Result<Self, Report<Error>> {
-        if payload.len() < 32 {
-            return Err(Report::new(Error::InvalidMessage));
-        }
+        ensure!(payload.len() >= 32, Error::InvalidMessage);
 
         let message_type = MessageType::abi_decode(&payload[0..32], true)
             .change_context(Error::InvalidMessageType)?;
@@ -215,12 +222,12 @@ impl ItsHubMessage {
                     .change_context(Error::InvalidMessage)?;
 
                 ItsHubMessage::ReceiveFromHub {
-                    source_chain: ChainName::try_from(decoded.source_chain)
+                    source_chain: ChainNameRaw::try_from(decoded.source_chain)
                         .change_context(Error::InvalidChainName)?,
                     message: ItsMessage::abi_decode(&decoded.message)?,
                 }
             }
-            _ => return Err(Report::new(Error::InvalidMessageType)),
+            _ => bail!(Error::InvalidMessageType),
         };
 
         Ok(hub_message)
@@ -248,8 +255,7 @@ mod tests {
     use cosmwasm_std::{HexBinary, Uint256};
     use router_api::ChainName;
 
-    use crate::abi::{DeployTokenManager, MessageType, SendToHub};
-    use crate::error::Error;
+    use crate::abi::{DeployTokenManager, Error, MessageType, SendToHub};
     use crate::{ItsHubMessage, ItsMessage, TokenManagerType};
 
     #[test]
@@ -282,7 +288,7 @@ mod tests {
                 },
             },
             ItsHubMessage::ReceiveFromHub {
-                source_chain: remote_chain.clone(),
+                source_chain: remote_chain.clone().into(),
                 message: ItsMessage::InterchainTransfer {
                     token_id: [0u8; 32].into(),
                     source_address: HexBinary::from_hex("").unwrap(),
@@ -292,7 +298,7 @@ mod tests {
                 },
             },
             ItsHubMessage::ReceiveFromHub {
-                source_chain: remote_chain.clone(),
+                source_chain: remote_chain.clone().into(),
                 message: ItsMessage::InterchainTransfer {
                     token_id: [255u8; 32].into(),
                     source_address: HexBinary::from_hex("4F4495243837681061C4743b74B3eEdf548D56A5")
@@ -347,7 +353,7 @@ mod tests {
                 },
             },
             ItsHubMessage::SendToHub {
-                destination_chain: ChainName::from_str("unicode-chain-🌍").unwrap(),
+                destination_chain: remote_chain.clone(),
                 message: ItsMessage::DeployInterchainToken {
                     token_id: [0u8; 32].into(),
                     name: "Unicode Token 🪙".into(),
@@ -357,7 +363,7 @@ mod tests {
                 },
             },
             ItsHubMessage::ReceiveFromHub {
-                source_chain: remote_chain.clone(),
+                source_chain: remote_chain.clone().into(),
                 message: ItsMessage::DeployInterchainToken {
                     token_id: [0u8; 32].into(),
                     name: "".into(),
@@ -367,7 +373,7 @@ mod tests {
                 },
             },
             ItsHubMessage::ReceiveFromHub {
-                source_chain: remote_chain.clone(),
+                source_chain: remote_chain.clone().into(),
                 message: ItsMessage::DeployInterchainToken {
                     token_id: [1u8; 32].into(),
                     name: "Test Token".into(),
@@ -377,7 +383,7 @@ mod tests {
                 },
             },
             ItsHubMessage::ReceiveFromHub {
-                source_chain: ChainName::from_str("unicode-chain-🌍").unwrap(),
+                source_chain: remote_chain.clone().into(),
                 message: ItsMessage::DeployInterchainToken {
                     token_id: [0u8; 32].into(),
                     name: "Unicode Token 🪙".into(),
@@ -424,7 +430,7 @@ mod tests {
                 },
             },
             ItsHubMessage::ReceiveFromHub {
-                source_chain: remote_chain.clone(),
+                source_chain: remote_chain.clone().into(),
                 message: ItsMessage::DeployTokenManager {
                     token_id: [0u8; 32].into(),
                     token_manager_type: TokenManagerType::NativeInterchainToken,
@@ -432,7 +438,7 @@ mod tests {
                 },
             },
             ItsHubMessage::ReceiveFromHub {
-                source_chain: remote_chain.clone(),
+                source_chain: remote_chain.clone().into(),
                 message: ItsMessage::DeployTokenManager {
                     token_id: [1u8; 32].into(),
                     token_manager_type: TokenManagerType::Gateway,
@@ -562,7 +568,7 @@ mod tests {
     #[test]
     fn encode_decode_unicode_strings() {
         let original = ItsHubMessage::SendToHub {
-            destination_chain: ChainName::from_str("unicode-chain-🌍").unwrap(),
+            destination_chain: ChainName::from_str("chain").unwrap(),
             message: ItsMessage::DeployInterchainToken {
                 token_id: [0u8; 32].into(),
                 name: "Unicode Token 🪙".into(),

@@ -9,7 +9,7 @@ use multisig::{
     key::KeyType,
     msg::Signer,
 };
-use service_registry::state::WeightedVerifier;
+use service_registry::WeightedVerifier;
 
 use crate::error::ContractError;
 use crate::querier::Querier;

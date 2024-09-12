@@ -131,7 +131,7 @@ mod internal {
         msg: ExecuteMsg,
     ) -> Result<Response, Error> {
         let config = state::load_config(deps.storage).change_context(Error::ConfigMissing)?;
-        let verifier = Client::new(deps.querier, config.verifier).into();
+        let verifier = Client::new(deps.querier, &config.verifier).into();
 
         let router = Router {
             address: config.router,

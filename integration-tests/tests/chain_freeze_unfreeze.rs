@@ -15,7 +15,7 @@ fn chain_can_be_freezed_unfreezed() {
         ..
     } = test_utils::setup_test_case();
 
-    let msgs = vec![Message {
+    let msgs: Vec<Message> = vec![Message {
         cc_id: CrossChainId::new(
             chain1.chain_name.clone(),
             "0x88d7956fd7b6fcec846548d83bd25727f2585b4be3add21438ae9fbb34625924-3",

@@ -1,5 +1,4 @@
-use axelar_wasm_std::nonempty;
-use axelar_wasm_std_derive::IntoContractError;
+use axelar_wasm_std::{nonempty, IntoContractError};
 use cosmwasm_std::StdError;
 use router_api::ChainName;
 use thiserror::Error;
@@ -75,4 +74,7 @@ pub enum ContractError {
 
     #[error("payload does not match the stored value")]
     PayloadMismatch,
+
+    #[error("failed to serialize data for the external gateway")]
+    SerializeData,
 }

@@ -263,7 +263,7 @@ fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
         wrapped_msg,
         &workers,
         ItsHubMessage::ReceiveFromHub {
-            source_chain: axelar_chain_name,
+            source_chain: axelar_chain_name.into(),
             message: interchain_transfer_msg,
         }.abi_encode(),
     );

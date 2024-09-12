@@ -84,7 +84,7 @@ mod test {
     #[test]
     fn query_messages_status() {
         let (querier, _, addr) = setup();
-        let client: Client = client::Client::new(QuerierWrapper::new(&querier), addr).into();
+        let client: Client = client::Client::new(QuerierWrapper::new(&querier), &addr).into();
 
         let msg_1 = XRPLMessage::UserMessage(UserMessage {
             tx_id: [0; 32],
@@ -119,7 +119,7 @@ mod test {
     #[test]
     fn query_current_threshold() {
         let (querier, instantiate_msg, addr) = setup();
-        let client: Client = client::Client::new(QuerierWrapper::new(&querier), addr).into();
+        let client: Client = client::Client::new(QuerierWrapper::new(&querier), &addr).into();
 
         assert_eq!(
             client.current_threshold().unwrap(),

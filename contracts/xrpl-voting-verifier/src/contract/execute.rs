@@ -12,7 +12,7 @@ use error_stack::Report;
 use itertools::Itertools;
 use router_api::ChainName;
 use service_registry::msg::QueryMsg;
-use service_registry::state::WeightedVerifier;
+use service_registry::WeightedVerifier;
 
 use crate::contract::query::message_status;
 use crate::error::ContractError;

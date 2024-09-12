@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use axelar_wasm_std::address_format::{validate_address, AddressFormat};
+use axelar_wasm_std::address::{validate_address, AddressFormat};
 use axelar_wasm_std::utils::TryMapExt;
 use axelar_wasm_std::voting::{PollId, PollResults, Vote, WeightedPoll};
 use axelar_wasm_std::{snapshot, MajorityThreshold, VerificationStatus};
@@ -13,7 +13,7 @@ use itertools::Itertools;
 use multisig::verifier_set::VerifierSet;
 use router_api::{ChainName, Message};
 use service_registry::msg::QueryMsg;
-use service_registry::state::WeightedVerifier;
+use service_registry::WeightedVerifier;
 
 use crate::contract::query::{message_status, verifier_set_status};
 use crate::error::ContractError;
@@ -339,7 +339,7 @@ fn create_verifier_set_poll(
     let id = POLL_ID.incr(store)?;
 
     let poll = WeightedPoll::new(id, snapshot, expires_at, 1);
-    POLLS.save(store, id, &state::Poll::ConfirmVerifierSet(poll))?;
+    POLLS.save(store, id, &Poll::ConfirmVerifierSet(poll))?;
 
     Ok(id)
 }
@@ -353,7 +353,7 @@ fn create_messages_poll(
     let id = POLL_ID.incr(store)?;
 
     let poll = WeightedPoll::new(id, snapshot, expires_at, poll_size);
-    POLLS.save(store, id, &state::Poll::Messages(poll))?;
+    POLLS.save(store, id, &Poll::Messages(poll))?;
 
     Ok(id)
 }

@@ -1,6 +1,8 @@
+use std::fmt::Display;
+
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{HexBinary, Uint256};
-use router_api::ChainName;
+use router_api::{ChainName, ChainNameRaw};
 use strum::FromRepr;
 
 #[cw_serde]
@@ -10,6 +12,12 @@ pub struct TokenId(
     #[schemars(with = "String")]
     [u8; 32],
 );
+
+impl Display for TokenId {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(self.0))
+    }
+}
 
 #[cw_serde]
 #[derive(Eq, Copy, FromRepr)]
@@ -26,7 +34,7 @@ pub enum TokenManagerType {
 /// ITS message type that can be sent between ITS contracts for transfers/token deployments
 /// `ItsMessage` that are routed via the ITS hub get wrapped inside `ItsHubMessage`
 #[cw_serde]
-#[derive(Eq)]
+#[derive(Eq, strum::IntoStaticStr)]
 pub enum ItsMessage {
     InterchainTransfer {
         token_id: TokenId,
@@ -62,7 +70,7 @@ pub enum ItsHubMessage {
     /// ITS Hub -> ITS edge destination contract
     ReceiveFromHub {
         /// True source chain of the ITS message
-        source_chain: ChainName,
+        source_chain: ChainNameRaw,
         message: ItsMessage,
     },
 }

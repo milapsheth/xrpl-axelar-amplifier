@@ -10,7 +10,7 @@ use xrpl_types::msg::XRPLMessage;
 
 use crate::{error::ContractError, state::Config};
 
-use service_registry::state::{Service, WeightedVerifier};
+use service_registry::{Service, WeightedVerifier};
 
 pub const XRPL_CHAIN_NAME: &str = "XRPL";
 

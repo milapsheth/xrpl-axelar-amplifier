@@ -46,7 +46,7 @@ pub fn verify_signature(
 
     // m.tx_hash is going to be over 32 bytes due to inclusion of the signer address, so it has to be passed unchecked
     Ok(signature
-        .verify(multisig::types::MsgToSign::unchecked(tx_hash), public_key)
+        .verify(tx_hash, public_key)
         .is_ok())
 }
 
