@@ -2,12 +2,11 @@ use std::{collections::HashSet, str::FromStr};
 
 use axelar_wasm_std::{permission_control, FnExt};
 use axelar_wasm_std::{MajorityThreshold, VerificationStatus};
-use interchain_token_service::{ItsHubMessage, TokenId};
+use interchain_token_service::ItsHubMessage;
 use router_api::{ChainName, CrossChainId};
 use cosmwasm_std::{
-    entry_point, to_json_binary, wasm_execute, Addr, Binary, Deps, DepsMut, Env, Fraction, HexBinary, MessageInfo, Reply, Response, StdResult, Storage, SubMsg, Uint128, Uint256, Uint64
+    entry_point, to_json_binary, wasm_execute, Addr, Binary, Deps, DepsMut, Env, Fraction, HexBinary, MessageInfo, Reply, Response, StdResult, Storage, SubMsg, Uint128, Uint64
 };
-// TODO: create custom message ID format
 
 use multisig::{key::PublicKey, types::MultisigState};
 use sha3::{Keccak256, Digest};
@@ -290,7 +289,7 @@ fn construct_payment_proof(
     let tx_hash = xrpl_multisig::issue_payment(
         storage,
         config,
-        destination_address.to_string().try_into()?,
+        String::from_utf8(hex::decode(destination_address.to_string())?)?, // TODO
         &xrpl_payment_amount,
         &message_id,
     )?;

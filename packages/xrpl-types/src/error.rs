@@ -58,8 +58,8 @@ pub enum XRPLError {
     #[error("verifier set is not set")]
     VerifierSetIsNotSet,
 
-    #[error("invalid address")]
-    InvalidAddress,
+    #[error("invalid address {0}")]
+    InvalidAddress(String),
 
     #[error("invalid currency")]
     InvalidCurrency,

@@ -12,6 +12,12 @@ pub enum ContractError {
     #[error(transparent)]
     TypeError(#[from] XRPLError), // TODO: rename to TypeConversionError
 
+    #[error(transparent)]
+    FromHexError(#[from] hex::FromHexError),
+
+    #[error(transparent)]
+    FromUtf8Error(#[from] std::string::FromUtf8Error),
+
     #[error("invalid amount: {reason}")]
     InvalidAmount { reason: String },
 

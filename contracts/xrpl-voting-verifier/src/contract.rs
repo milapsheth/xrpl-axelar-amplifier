@@ -1,4 +1,4 @@
-use axelar_wasm_std::{nonempty, permission_control};
+use axelar_wasm_std::permission_control;
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
@@ -92,12 +92,12 @@ pub fn migrate(
 mod test {
     use axelar_wasm_std::voting::Vote;
     use axelar_wasm_std::{
-        MajorityThreshold, Threshold, VerificationStatus,
+        nonempty, MajorityThreshold, Threshold, VerificationStatus
     };
     use cosmwasm_std::testing::{
         mock_dependencies, mock_env, mock_info, MockApi, MockQuerier, MockStorage,
     };
-    use cosmwasm_std::{from_json, Addr, Empty, Fraction, OwnedDeps, Uint128, Uint64, WasmQuery};
+    use cosmwasm_std::{from_json, Addr, Empty, Fraction, OwnedDeps, Uint64, WasmQuery};
     use service_registry::{
         AuthorizationState, BondingState, Verifier, WeightedVerifier, VERIFIER_WEIGHT,
     };

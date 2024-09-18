@@ -1,4 +1,3 @@
-use axelar_wasm_std::nonempty;
 use router_api::CrossChainId;
 use cosmwasm_std::{HexBinary, Storage};
 use sha2::{Digest, Sha256, Sha512};
@@ -45,7 +44,7 @@ fn issue_tx(
 pub fn issue_payment(
     storage: &mut dyn Storage,
     config: &Config,
-    destination: nonempty::String,
+    destination: String,
     amount: &XRPLPaymentAmount,
     message_id: &CrossChainId,
 ) -> Result<TxHash, ContractError> {

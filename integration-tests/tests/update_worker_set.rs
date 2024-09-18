@@ -7,10 +7,7 @@ use integration_tests::contract::Contract;
 use multisig_prover::msg::ExecuteMsg;
 use service_registry::msg::QueryMsg as ServiceRegistryQueryMsg;
 use service_registry::WeightedVerifier;
-use test_utils::{
-    create_new_verifiers_vec, multisig_session_id, register_in_service_registry,
-    register_verifiers, rotate_active_verifier_set, Verifier,
-};
+use test_utils::Verifier;
 use xrpl_types::msg::XRPLMessage;
 
 pub mod test_utils;
@@ -117,10 +114,17 @@ fn verifier_set_can_be_initialized_and_then_manually_updated() {
 fn xrpl_verifier_set_can_be_initialized_and_then_manually_updated() {
     let chains: Vec<ChainName> = vec![
         "Ethereum".to_string().try_into().unwrap(),
+        "Axelarnet".to_string().try_into().unwrap(),
         "XRPL".to_string().try_into().unwrap(),
     ];
-    let (mut protocol, _, xrpl, initial_verifiers, min_verifier_bond) =
-        test_utils::setup_xrpl_destination_test_case();
+    let test_utils::XRPLDestinationTestCase {
+        mut protocol,
+        xrpl,
+        verifiers,
+        min_verifier_bond,
+        ..
+    } = test_utils::setup_xrpl_destination_test_case();
+    let initial_verifiers = verifiers; // TODO
 
     let simulated_verifier_set = test_utils::xrpl_verifiers_to_verifier_set(&mut protocol, &initial_verifiers);
 

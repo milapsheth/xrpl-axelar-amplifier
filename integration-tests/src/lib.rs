@@ -1,6 +1,8 @@
 pub mod contract;
 pub mod coordinator_contract;
 pub mod gateway_contract;
+pub mod axelarnet_gateway_contract;
+pub mod interchain_token_service_contract;
 pub mod xrpl_gateway_contract;
 pub mod multisig_contract;
 pub mod multisig_prover_contract;

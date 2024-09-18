@@ -321,10 +321,10 @@ impl std::str::FromStr for XRPLAccountId {
         let res = bs58::decode(address)
             .with_alphabet(bs58::Alphabet::RIPPLE)
             .into_vec()
-            .map_err(|_| XRPLError::InvalidAddress)?;
-        // .map_err(|_| XRPLError::InvalidAddress)?;
+            .map_err(|_| XRPLError::InvalidAddress(address.to_string()))?;
+
         if res.len() != 25 {
-            return Err(XRPLError::InvalidAddress);
+            return Err(XRPLError::InvalidAddress(address.to_string()));
         }
         let mut buffer = [0u8; 20];
         buffer.copy_from_slice(&res[1..21]);
