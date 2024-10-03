@@ -13,6 +13,7 @@ pub(crate) struct Config {
     pub its_hub: Addr,
     pub axelar_chain_name: ChainName,
     pub xrpl_chain_name: ChainName,
+    pub xrpl_multisig_address: String,
 }
 
 pub(crate) fn save_config(storage: &mut dyn Storage, value: &Config) -> Result<(), Error> {
@@ -61,6 +62,7 @@ mod test {
             its_hub: Addr::unchecked("its_hub"),
             axelar_chain_name: ChainName::from_str("axelar").unwrap(),
             xrpl_chain_name: ChainName::from_str("xrpl").unwrap(),
+            xrpl_multisig_address: "raNVNWvhUQzFkDDTdEw3roXRJfMJFVJuQo".to_string(),
         };
         assert!(save_config(deps.as_mut().storage, &config).is_ok());
 

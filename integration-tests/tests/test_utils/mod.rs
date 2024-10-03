@@ -4,7 +4,6 @@ use axelar_wasm_std::{
     nonempty, voting::{PollId, Vote}, Participant, Threshold, VerificationStatus
 };
 use axelarnet_gateway::ExecutableMessage;
-use xrpl_multisig_prover::querier::XRPL_CHAIN_NAME;
 use xrpl_types::{msg::{XRPLHash, XRPLMessage, XRPLMessageWithPayload}, types::{XRPLAccountId, XRPL_MESSAGE_ID_FORMAT}};
 use std::collections::{HashMap, HashSet};
 
@@ -1214,31 +1213,34 @@ pub fn setup_xrpl(
     axelar_its_hub_address: Addr,
     axelar_chain_name: ChainName,
 ) -> XRPLChain {
-    let chain_name = ChainName::from_str(XRPL_CHAIN_NAME).unwrap();
+    let xrpl_chain_name = ChainName::from_str("xrpl").unwrap();
 
     let voting_verifier = XRPLVotingVerifierContract::instantiate_contract(
         protocol,
         "doesn't matter".to_string().try_into().unwrap(),
         Threshold::try_from((9, 10)).unwrap().try_into().unwrap(),
+        xrpl_chain_name.clone(),
     );
 
+    let xrpl_multisig_address = "rfEf91bLxrTVC76vw1W3Ur8Jk4Lwujskmb".to_string();
     let gateway= XRPLGatewayContract::instantiate_contract(
         &mut protocol.app,
         protocol.router.contract_address().clone(),
         voting_verifier.contract_addr.clone(),
         axelar_its_hub_address,
         axelar_chain_name,
+        xrpl_chain_name.clone(),
+        xrpl_multisig_address.clone(),
     );
 
-    let xrpl_multisig_address = "rfEf91bLxrTVC76vw1W3Ur8Jk4Lwujskmb".to_string(); // TODO: fix duplicate definition
-    let multisig_prover_admin = Addr::unchecked(chain_name.to_string() + "prover_admin");
+    let multisig_prover_admin = Addr::unchecked(xrpl_chain_name.to_string() + "prover_admin");
     let multisig_prover = XRPLMultisigProverContract::instantiate_contract(
         protocol,
         multisig_prover_admin.clone(),
         gateway.contract_addr.clone(),
         voting_verifier.contract_addr.clone(),
+        xrpl_chain_name.clone(),
         xrpl_multisig_address.clone(),
-        //chain_name.to_string(),
         // TODO:
         /*voting_verifier_address: voting_verifier_address.to_string(),
         signing_threshold: (2, 3).try_into().unwrap(),
@@ -1252,10 +1254,7 @@ pub fn setup_xrpl(
         available_tickets: vec![
             vec![],
             (44218195..44218200).collect::<Vec<_>>()
-        ].concat(),
-        governance_address: protocol.governance_address.to_string(),
-        relayer_address: Addr::unchecked("relayer").to_string(),
-        xrp_denom: "uxrp".to_string(),*/
+        ].concat(),*/
     );
 
     // register_xrpl_token(
@@ -1282,7 +1281,7 @@ pub fn setup_xrpl(
         &multisig::msg::ExecuteMsg::AuthorizeCallers {
             contracts: HashMap::from([(
                 multisig_prover.contract_addr.to_string(),
-                chain_name.clone(),
+                xrpl_chain_name.clone(),
             )]),
         },
     );
@@ -1292,7 +1291,7 @@ pub fn setup_xrpl(
         &mut protocol.app,
         protocol.governance_address.clone(),
         &router_api::msg::ExecuteMsg::RegisterChain {
-            chain: chain_name.clone(),
+            chain: xrpl_chain_name.clone(),
             gateway_address: gateway.contract_addr.to_string().try_into().unwrap(),
             msg_id_format: XRPL_MESSAGE_ID_FORMAT,
         },
@@ -1310,7 +1309,7 @@ pub fn setup_xrpl(
         protocol.governance_address.clone(),
         &rewards::msg::ExecuteMsg::CreatePool {
             pool_id: PoolId {
-                chain_name: chain_name.clone(),
+                chain_name: xrpl_chain_name.clone(),
                 contract: voting_verifier.contract_addr.clone(),
             },
             params: rewards_params.clone(),
@@ -1323,7 +1322,7 @@ pub fn setup_xrpl(
         protocol.governance_address.clone(),
         &rewards::msg::ExecuteMsg::CreatePool {
             pool_id: PoolId {
-                chain_name: chain_name.clone(),
+                chain_name: xrpl_chain_name.clone(),
                 contract: protocol.multisig.contract_addr.clone(),
             },
             params: rewards_params,
@@ -1336,7 +1335,7 @@ pub fn setup_xrpl(
         protocol.genesis_address.clone(),
         &rewards::msg::ExecuteMsg::AddRewards {
             pool_id: PoolId {
-                chain_name: chain_name.clone(),
+                chain_name: xrpl_chain_name.clone(),
                 contract: voting_verifier.contract_addr.clone(),
             },
         },
@@ -1349,7 +1348,7 @@ pub fn setup_xrpl(
         protocol.genesis_address.clone(),
         &rewards::msg::ExecuteMsg::AddRewards {
             pool_id: PoolId {
-                chain_name: chain_name.clone(),
+                chain_name: xrpl_chain_name.clone(),
                 contract: protocol.multisig.contract_addr.clone(),
             },
         },
@@ -1361,7 +1360,7 @@ pub fn setup_xrpl(
         &mut protocol.app,
         protocol.governance_address.clone(),
         &CoordinatorExecuteMsg::RegisterProverContract {
-            chain_name: chain_name.clone(),
+            chain_name: xrpl_chain_name.clone(),
             new_prover_addr: multisig_prover.contract_addr.clone(),
         },
     );
@@ -1382,7 +1381,7 @@ pub fn setup_xrpl(
         gateway,
         voting_verifier,
         multisig_prover,
-        chain_name,
+        chain_name: xrpl_chain_name,
         its_address: Address::try_from(xrpl_multisig_address).unwrap(),
     }
 }
@@ -1530,9 +1529,7 @@ pub fn setup_xrpl_source_test_case() -> XRPLSourceTestCase {
     );
 
     let xrpl = setup_xrpl(&mut protocol, &verifiers, its_hub.contract_addr.clone(), axelarnet.chain_name.clone());
-    // TODO: should be xrpl.its_address == xrpl_multisig_address, not gateway address
-    // set_its_address(&mut protocol, &its_hub, xrpl.chain_name.clone(), xrpl.its_address.clone());
-    set_its_address(&mut protocol, &its_hub, xrpl.chain_name.clone(), Address::from_str(&xrpl.gateway.contract_addr.to_string()).unwrap());
+    set_its_address(&mut protocol, &its_hub, xrpl.chain_name.clone(), xrpl.its_address.clone());
 
     let destination_chain = setup_chain(&mut protocol, chains.get(2).unwrap().clone(), &verifiers);
     set_its_address(&mut protocol, &its_hub, destination_chain.chain_name.clone(), destination_chain.its_address.clone());

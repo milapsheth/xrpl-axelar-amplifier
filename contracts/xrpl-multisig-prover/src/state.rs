@@ -1,6 +1,6 @@
 use crate::axelar_workers::VerifierSet;
 use axelar_wasm_std::MajorityThreshold;
-use router_api::CrossChainId;
+use router_api::{ChainName, CrossChainId};
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::Addr;
 use cw_storage_plus::{Item, Map};
@@ -18,6 +18,7 @@ pub struct Config {
     pub voting_verifier: Addr,
     pub service_registry: Addr,
     pub service_name: String,
+    pub chain_name: ChainName,
     pub verifier_set_diff_threshold: u32,
     pub xrpl_fee: u64,
     pub ticket_count_threshold: u32,

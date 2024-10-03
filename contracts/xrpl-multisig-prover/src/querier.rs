@@ -1,7 +1,5 @@
-use std::str::FromStr;
-
 use axelar_wasm_std::VerificationStatus;
-use router_api::{ChainName, CrossChainId, Message};
+use router_api::{CrossChainId, Message};
 use cosmwasm_schema::serde::{de::DeserializeOwned, Serialize};
 use cosmwasm_std::{to_json_binary, QuerierWrapper, QueryRequest, Uint64, WasmQuery};
 use multisig::{key::PublicKey, multisig::Multisig};
@@ -11,8 +9,6 @@ use xrpl_types::msg::XRPLMessage;
 use crate::{error::ContractError, state::Config};
 
 use service_registry::{Service, WeightedVerifier};
-
-pub const XRPL_CHAIN_NAME: &str = "XRPL";
 
 fn query<U, T>(
     querier: QuerierWrapper,
@@ -57,7 +53,7 @@ impl<'a> Querier<'a> {
             self.config.service_registry.to_string(),
             &service_registry::msg::QueryMsg::ActiveVerifiers {
                 service_name: self.config.service_name.clone(),
-                chain_name: ChainName::from_str(XRPL_CHAIN_NAME).unwrap(),
+                chain_name: self.config.chain_name.clone(),
             },
         )
     }

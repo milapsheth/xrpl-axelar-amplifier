@@ -1,5 +1,5 @@
 use axelar_wasm_std::{MajorityThreshold, VerificationStatus};
-use router_api::CrossChainId;
+use router_api::{ChainName, CrossChainId};
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::{HexBinary, Uint64};
 use multisig::key::PublicKey;
@@ -17,6 +17,7 @@ pub struct InstantiateMsg {
     pub service_registry_address: String,
     pub coordinator_address: String,
     pub service_name: String,
+    pub chain_name: ChainName,
     pub verifier_set_diff_threshold: u32,
     pub xrpl_fee: u64,
     pub ticket_count_threshold: u32,

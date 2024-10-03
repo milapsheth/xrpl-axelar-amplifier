@@ -2,6 +2,7 @@ use crate::{contract::Contract, protocol::Protocol};
 use axelar_wasm_std::Threshold;
 use cosmwasm_std::Addr;
 use cw_multi_test::{ContractWrapper, Executor};
+use router_api::ChainName;
 
 #[derive(Clone)]
 pub struct XRPLMultisigProverContract {
@@ -15,6 +16,7 @@ impl XRPLMultisigProverContract {
         admin_address: Addr,
         gateway_address: Addr,
         voting_verifier_address: Addr,
+        xrpl_chain_name: ChainName,
         xrpl_multisig_address: String,
     ) -> Self {
         let code = ContractWrapper::new(
@@ -40,6 +42,7 @@ impl XRPLMultisigProverContract {
                     voting_verifier_address: voting_verifier_address.to_string(),
                     signing_threshold: Threshold::try_from((2, 3)).unwrap().try_into().unwrap(),
                     service_name: protocol.service_name.to_string(),
+                    chain_name: xrpl_chain_name,
                     verifier_set_diff_threshold: 0,
                     xrpl_fee: 30,
                     xrpl_multisig_address: xrpl_multisig_address.clone(),

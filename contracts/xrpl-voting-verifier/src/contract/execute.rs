@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::str::FromStr;
 
 use axelar_wasm_std::utils::TryMapExt;
 use axelar_wasm_std::voting::{PollId, PollResults, Vote, WeightedPoll};
@@ -10,7 +9,6 @@ use cosmwasm_std::{
 };
 use error_stack::Report;
 use itertools::Itertools;
-use router_api::ChainName;
 use service_registry::msg::QueryMsg;
 use service_registry::WeightedVerifier;
 
@@ -23,8 +21,6 @@ use xrpl_types::msg::XRPLMessage;
 use crate::state::{
     self, poll_messages, Poll, CONFIG, POLLS, POLL_ID, VOTES,
 };
-
-const XRPL_CHAIN_NAME: &str = "xrpl";
 
 pub fn update_voting_threshold(
     deps: DepsMut,
@@ -223,7 +219,7 @@ pub fn end_poll(deps: DepsMut, env: Env, poll_id: PollId) -> Result<Response, Co
         .map(|address| WasmMsg::Execute {
             contract_addr: config.rewards_contract.to_string(),
             msg: to_json_binary(&rewards::msg::ExecuteMsg::RecordParticipation {
-                chain_name: ChainName::from_str(XRPL_CHAIN_NAME).unwrap(), // TODO
+                chain_name: config.source_chain.clone(),
                 event_id: poll_id
                     .to_string()
                     .try_into()
@@ -250,7 +246,7 @@ fn take_snapshot(deps: Deps) -> Result<snapshot::Snapshot, ContractError> {
     // query service registry for active verifiers
     let active_verifiers_query = QueryMsg::ActiveVerifiers {
         service_name: config.service_name.to_string(),
-        chain_name: ChainName::from_str(XRPL_CHAIN_NAME).unwrap(),
+        chain_name: config.source_chain,
     };
 
     let verifiers: Vec<WeightedVerifier> =

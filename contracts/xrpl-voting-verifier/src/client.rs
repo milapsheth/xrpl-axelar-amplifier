@@ -159,6 +159,7 @@ mod test {
                 .unwrap(),
             block_expiry: 100.try_into().unwrap(),
             confirmation_height: 10,
+            source_chain: "source-chain".parse().unwrap(),
             rewards_address: "rewards".try_into().unwrap(),
         };
 

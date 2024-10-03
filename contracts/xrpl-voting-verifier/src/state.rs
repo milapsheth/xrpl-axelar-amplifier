@@ -4,6 +4,7 @@ use axelar_wasm_std::{counter, nonempty, MajorityThreshold};
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{Addr, Order, StdResult, Storage};
 use cw_storage_plus::{Index, IndexList, IndexedMap, Item, Map, MultiIndex};
+use router_api::ChainName;
 
 use crate::error::ContractError;
 use xrpl_types::msg::XRPLMessage;
@@ -16,6 +17,7 @@ pub struct Config {
     pub voting_threshold: MajorityThreshold,
     pub block_expiry: nonempty::Uint64, // number of blocks after which a poll expires
     pub confirmation_height: u64,
+    pub source_chain: ChainName,
     pub rewards_contract: Addr,
 }
 

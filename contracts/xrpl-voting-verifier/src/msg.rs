@@ -2,6 +2,7 @@ use axelar_wasm_std::voting::{PollId, PollStatus, Vote, WeightedPoll};
 use axelar_wasm_std::{nonempty, MajorityThreshold, VerificationStatus};
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use msgs_derive::EnsurePermissions;
+use router_api::ChainName;
 use xrpl_types::msg::*;
 
 #[cw_serde]
@@ -34,6 +35,8 @@ pub struct InstantiateMsg {
     pub block_expiry: nonempty::Uint64,
     /// The number of blocks to wait for on the source chain before considering a transaction final
     pub confirmation_height: u64,
+    /// Name of the source chain
+    pub source_chain: ChainName,
     /// Rewards contract address on axelar.
     pub rewards_address: nonempty::String,
 }

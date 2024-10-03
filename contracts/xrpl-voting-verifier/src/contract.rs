@@ -34,6 +34,7 @@ pub fn instantiate(
         voting_threshold: msg.voting_threshold,
         block_expiry: msg.block_expiry,
         confirmation_height: msg.confirmation_height,
+        source_chain: msg.source_chain,
         rewards_contract: deps.api.addr_validate(&msg.rewards_address)?,
     };
     CONFIG.save(deps.storage, &config)?;
@@ -94,6 +95,7 @@ mod test {
         mock_dependencies, mock_env, mock_info, MockApi, MockQuerier, MockStorage,
     };
     use cosmwasm_std::{from_json, Addr, Empty, Fraction, HexBinary, OwnedDeps, Uint64, WasmQuery};
+    use router_api::ChainName;
     use service_registry::{
         AuthorizationState, BondingState, Verifier, WeightedVerifier, VERIFIER_WEIGHT,
     };
@@ -110,6 +112,10 @@ mod test {
     const SERVICE_NAME: &str = "service_name";
     const POLL_BLOCK_EXPIRY: u64 = 100;
     const GOVERNANCE: &str = "governance";
+
+    fn source_chain() -> ChainName {
+        "source-chain".parse().unwrap()
+    }
 
     fn initial_voting_threshold() -> MajorityThreshold {
         Threshold::try_from((2, 3)).unwrap().try_into().unwrap()
@@ -145,6 +151,7 @@ mod test {
                 voting_threshold: initial_voting_threshold(),
                 block_expiry: POLL_BLOCK_EXPIRY.try_into().unwrap(),
                 confirmation_height: 100,
+                source_chain: source_chain(),
                 rewards_address: REWARDS_ADDRESS.parse().unwrap(),
             },
         )

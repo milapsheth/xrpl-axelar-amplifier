@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
-use std::str::FromStr;
 
 use async_trait::async_trait;
 use axelar_wasm_std::msg_id::HexTxHashAndEventIndex;
@@ -18,7 +17,6 @@ use events_derive::try_from;
 use voting_verifier::msg::ExecuteMsg;
 use events::Error::EventTypeMismatch;
 use tracing::{info, info_span};
-use xrpl_multisig_prover::querier::XRPL_CHAIN_NAME;
 use xrpl_types::msg::XRPLMessage;
 
 use crate::event_processor::EventHandler;
@@ -108,9 +106,10 @@ where
             event => event.change_context(Error::DeserializeEvent)?,
         };
 
-        if source_chain != ChainName::from_str(XRPL_CHAIN_NAME).unwrap() { // TODO: remove unwrap
-            return Ok(vec![]);
-        }
+        // TODO: redundant?
+        // if source_chain != XRPL {
+        //     return Ok(vec![]);
+        // }
 
         if !participants.contains(&self.verifier) {
             return Ok(vec![]);

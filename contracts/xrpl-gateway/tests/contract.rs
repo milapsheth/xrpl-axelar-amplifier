@@ -35,6 +35,7 @@ fn instantiate_works() {
             its_hub_address: Addr::unchecked("its_hub").into_string(),
             axelar_chain_name: ChainName::from_str("axelar").unwrap(),
             xrpl_chain_name: ChainName::from_str("xrpl").unwrap(),
+            xrpl_multisig_address: "raNVNWvhUQzFkDDTdEw3roXRJfMJFVJuQo".to_string(),
         },
     );
 
@@ -620,6 +621,7 @@ fn instantiate_contract(
             its_hub_address: Addr::unchecked(its_hub).into_string(),
             axelar_chain_name,
             xrpl_chain_name: ChainName::from_str("xrpl").unwrap(),
+            xrpl_multisig_address: "raNVNWvhUQzFkDDTdEw3roXRJfMJFVJuQo".to_string(),
         }
         .clone(),
     );

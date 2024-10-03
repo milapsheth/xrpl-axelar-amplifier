@@ -17,6 +17,7 @@ impl From<Config> for Vec<Attribute> {
             voting_threshold,
             block_expiry,
             confirmation_height,
+            source_chain,
             rewards_contract,
         } = other;
 
@@ -34,6 +35,7 @@ impl From<Config> for Vec<Attribute> {
             ),
             ("block_expiry", block_expiry.to_string()),
             ("confirmation_height", confirmation_height.to_string()),
+            ("source_chain", source_chain.to_string()),
             ("rewards_contract", rewards_contract.to_string()),
         ]
         .into_iter()

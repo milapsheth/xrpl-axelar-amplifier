@@ -16,6 +16,8 @@ pub struct InstantiateMsg {
     pub axelar_chain_name: ChainName,
     /// Chain name of the XRPL chain.
     pub xrpl_chain_name: ChainName,
+    /// Address of the Axelar Gateway multisig account on XRPL.
+    pub xrpl_multisig_address: String,
 }
 
 #[cw_serde]
@@ -31,12 +33,14 @@ pub struct InterchainTokenDeployment {
 #[cw_serde]
 #[derive(EnsurePermissions)]
 pub enum ExecuteMsg {
-    /// TODO
-    #[permission(Any)] // TODO: make permissioned
+    // TODO
+    // #[permission(Specific(Admin))]
+    #[permission(Any)]
     DeployXRPToSidechain { sidechain_name: ChainName, params: HexBinary },
 
-    /// TODO
-    #[permission(Any)] // TODO: make permissioned
+    // TODO
+    // #[permission(Specific(Admin))]
+    #[permission(Any)]
     DeployInterchainToken(InterchainTokenDeployment),
 
     /// Before messages that are unknown to the system can be routed, they need to be verified.

@@ -86,6 +86,7 @@ pub enum Error {
 }
 
 mod internal {
+    use axelar_wasm_std::address;
     use client::Client;
     use cosmwasm_std::{to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response};
     use error_stack::{Result, ResultExt};
@@ -103,25 +104,21 @@ mod internal {
         _info: MessageInfo,
         msg: InstantiateMsg,
     ) -> Result<Response, Error> {
-        let router = deps
-            .api
-            .addr_validate(&msg.router_address)
-            .change_context(Error::InvalidAddress)
-            .attach_printable(msg.router_address)?;
+        let router = address::validate_cosmwasm_address(deps.api, &msg.router_address)
+            .change_context(Error::InvalidAddress)?;
+        let verifier = address::validate_cosmwasm_address(deps.api, &msg.verifier_address)
+            .change_context(Error::InvalidAddress)?;
+        let its_hub = address::validate_cosmwasm_address(deps.api, &msg.its_hub_address)
+            .change_context(Error::InvalidAddress)?;
 
-        let verifier = deps
-            .api
-            .addr_validate(&msg.verifier_address)
-            .change_context(Error::InvalidAddress)
-            .attach_printable(msg.verifier_address)?;
-
-        let its_hub = deps
-            .api
-            .addr_validate(&msg.its_hub_address)
-            .change_context(Error::InvalidAddress)
-            .attach_printable(msg.its_hub_address)?;
-
-        state::save_config(deps.storage, &Config { verifier, router, its_hub, axelar_chain_name: msg.axelar_chain_name, xrpl_chain_name: msg.xrpl_chain_name })
+        state::save_config(deps.storage, &Config {
+            verifier,
+            router,
+            its_hub,
+            axelar_chain_name: msg.axelar_chain_name,
+            xrpl_chain_name: msg.xrpl_chain_name,
+            xrpl_multisig_address: msg.xrpl_multisig_address,
+        })
             .change_context(Error::InvalidStoreAccess)?;
 
         Ok(Response::new())
@@ -141,7 +138,6 @@ mod internal {
         };
 
         match msg.ensure_permissions(deps.storage, &info.sender).map_err(|_| Error::InvalidPermissions)? {
-            // TODO: only admin
             ExecuteMsg::DeployXRPToSidechain {
                 sidechain_name,
                 params,
@@ -156,7 +152,6 @@ mod internal {
                 &sidechain_name,
                 params,
             ),
-            // TODO: only admin
             ExecuteMsg::DeployInterchainToken(params) => contract::execute::deploy_interchain_token(
                 deps.storage,
                 env.block.height,
@@ -177,12 +172,12 @@ mod internal {
             },
             ExecuteMsg::RouteIncomingMessages(msgs) => contract::execute::route_incoming_messages(
                 deps.storage,
-                &env.contract.address,
                 &verifier,
                 &router,
                 msgs,
                 &config.its_hub,
                 &config.axelar_chain_name,
+                &config.xrpl_multisig_address,
             ),
         }
     }

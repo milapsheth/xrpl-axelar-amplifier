@@ -30,12 +30,12 @@ pub fn verify_messages(
 
 pub(crate) fn route_incoming_messages(
     store: &dyn Storage,
-    self_address: &Addr,
     verifier: &xrpl_voting_verifier::Client,
     router: &Router,
     msgs: Vec<XRPLMessageWithPayload>,
     its_hub: &Addr,
     axelar_chain_name: &ChainName,
+    xrpl_multisig_address: &String,
 ) -> Result<Response, Error> {
     let msg_id_to_payload: HashMap<CrossChainId, HexBinary> = msgs.iter().map(|msg| (msg.message.cc_id(), msg.payload.clone())).collect();
     apply(verifier, msgs.into_iter().map(|m| m.message).collect(), |msgs_by_status| {
@@ -43,7 +43,7 @@ pub(crate) fn route_incoming_messages(
             let payloads: Vec<HexBinary> = msgs.iter().map(|msg| msg_id_to_payload.get(&msg.cc_id()).unwrap().clone()).collect();
             (status, msgs.into_iter().zip(payloads).map(|(msg, payload)| XRPLMessageWithPayload { message: msg, payload }).collect())
         }).collect();
-        route(store, self_address, router, msgs_by_status, its_hub, axelar_chain_name)
+        route(store, router, msgs_by_status, its_hub, axelar_chain_name, xrpl_multisig_address)
     })
 }
 
@@ -231,16 +231,16 @@ fn verify(
 
 fn route(
     store: &dyn Storage,
-    self_address: &Addr,
     router: &Router,
     msgs_by_status: Vec<(VerificationStatus, Vec<XRPLMessageWithPayload>)>,
     its_hub: &Addr,
     axelar_chain_name: &ChainName,
+    xrpl_multisig_address: &String,
 ) -> (Option<WasmMsg>, Vec<Event>) {
     msgs_by_status
         .into_iter()
         .map(|(status, msgs)| {
-            let msgs: Vec<Message> = msgs.iter().map(|m| to_its_message(store, self_address, m.clone(), its_hub, axelar_chain_name)).collect();
+            let msgs: Vec<Message> = msgs.iter().map(|m| to_its_message(store, m.clone(), its_hub, axelar_chain_name, xrpl_multisig_address)).collect();
             (
                 filter_routable_messages(status, &msgs),
                 into_route_events(status, msgs),
@@ -311,10 +311,10 @@ fn messages_into_events<T>(msgs: Vec<T>, transform: fn(T) -> GatewayEvent) -> Ve
 
 fn to_its_message(
     store: &dyn Storage,
-    self_address: &Addr, // TODO: should be xrpl_multisig_address
     msg: XRPLMessageWithPayload,
     its_hub: &Addr,
     axelar_chain_name: &ChainName,
+    xrpl_multisig_address: &String,
 ) -> Message {
     match msg.message.clone() {
         XRPLMessage::ProverMessage(_tx_hash) => todo!(),
@@ -341,8 +341,7 @@ fn to_its_message(
 
             Message {
                 cc_id: msg.message.cc_id(),
-                // TODO: should be the xrpl_multisig_address, instead of the gateway address
-                source_address: Address::from_str(self_address.as_str()).unwrap(),
+                source_address: Address::from_str(xrpl_multisig_address).unwrap(),
                 destination_address: Address::from_str(its_hub.as_str()).unwrap(),
                 destination_chain: axelar_chain_name.clone(),
                 payload_hash: Keccak256::digest(payload.as_slice()).into(),

@@ -239,7 +239,7 @@ fn payment_from_xrpl_can_be_verified_and_routed_and_proven() {
                 .try_into()
                 .unwrap(),
         },
-        source_address: Address::from_str(xrpl.gateway.contract_addr.as_str()).unwrap(), // TODO: should be xrpl.its_address == xrpl_multisig_address
+        source_address: Address::from_str(&xrpl.its_address).unwrap(),
         destination_address: Address::try_from(its_hub.contract_addr.to_string()).unwrap(),
         destination_chain: axelarnet.chain_name.clone(),
         payload_hash: keccak256(wrapped_payload.clone()),

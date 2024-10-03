@@ -19,7 +19,7 @@ use crate::{
     axelar_workers::{self, VerifierSet},
     error::ContractError,
     msg::{ExecuteMsg, InstantiateMsg, QueryMsg},
-    querier::{Querier, XRPL_CHAIN_NAME},
+    querier::Querier,
     query, reply,
     state::{
         Config, AVAILABLE_TICKETS, CONFIG, CURRENT_VERIFIER_SET, LAST_ASSIGNED_TICKET_NUMBER,
@@ -93,6 +93,7 @@ fn make_config(
         voting_verifier,
         service_registry,
         service_name: msg.service_name,
+        chain_name: msg.chain_name,
         verifier_set_diff_threshold: msg.verifier_set_diff_threshold,
         xrpl_fee: msg.xrpl_fee,
         ticket_count_threshold: msg.ticket_count_threshold,
@@ -323,7 +324,7 @@ pub fn start_signing_session(
 
     let start_sig_msg: multisig::msg::ExecuteMsg = multisig::msg::ExecuteMsg::StartSigningSession {
         verifier_set_id: cur_verifier_set_id,
-        chain_name: ChainName::from_str(XRPL_CHAIN_NAME).unwrap(),
+        chain_name: config.chain_name.clone(),
         msg: tx_hash.into(),
         sig_verifier: Some(self_address.into()),
     };
