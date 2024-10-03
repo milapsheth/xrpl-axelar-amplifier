@@ -1,16 +1,22 @@
+use std::collections::HashMap;
 use std::str::FromStr;
 
+use axelar_wasm_std::msg_id::HexTxHashAndEventIndex;
 use axelar_wasm_std::{FnExt, VerificationStatus};
-use cosmwasm_std::{Addr, Event, Response, Storage, WasmMsg};
+use cosmwasm_std::{Addr, Event, HexBinary, Response, Storage, Uint256, WasmMsg};
 use error_stack::{report, Result, ResultExt};
 use itertools::Itertools;
 use router_api::client::Router;
-use router_api::{Address, ChainName, Message};
+use router_api::{Address, ChainName, CrossChainId, Message};
+use sha3::{Digest, Keccak256};
+use xrpl_types::types::{XRPLPaymentAmount, XRPLTokenOrXRP};
 use xrpl_voting_verifier::msg::MessageStatus;
-use xrpl_types::msg::{CrossChainMessage, XRPLMessage};
+use xrpl_types::msg::{CrossChainMessage, XRPLMessage, XRPLMessageWithPayload};
+use interchain_token_service::{ItsHubMessage, ItsMessage, TokenId, TokenManagerType};
 
 use crate::contract::Error;
 use crate::events::GatewayEvent;
+use crate::msg::InterchainTokenDeployment;
 use crate::state;
 
 pub fn verify_messages(
@@ -23,12 +29,21 @@ pub fn verify_messages(
 }
 
 pub(crate) fn route_incoming_messages(
+    store: &dyn Storage,
+    self_address: &Addr,
     verifier: &xrpl_voting_verifier::Client,
     router: &Router,
-    msgs: Vec<XRPLMessage>,
+    msgs: Vec<XRPLMessageWithPayload>,
+    its_hub: &Addr,
+    axelar_chain_name: &ChainName,
 ) -> Result<Response, Error> {
-    apply(verifier, msgs, |msgs_by_status| {
-        route(router, msgs_by_status)
+    let msg_id_to_payload: HashMap<CrossChainId, HexBinary> = msgs.iter().map(|msg| (msg.message.cc_id(), msg.payload.clone())).collect();
+    apply(verifier, msgs.into_iter().map(|m| m.message).collect(), |msgs_by_status| {
+        let msgs_by_status = msgs_by_status.into_iter().map(|(status, msgs)| {
+            let payloads: Vec<HexBinary> = msgs.iter().map(|msg| msg_id_to_payload.get(&msg.cc_id()).unwrap().clone()).collect();
+            (status, msgs.into_iter().zip(payloads).map(|(msg, payload)| XRPLMessageWithPayload { message: msg, payload }).collect())
+        }).collect();
+        route(store, self_address, router, msgs_by_status, its_hub, axelar_chain_name)
     })
 }
 
@@ -70,13 +85,99 @@ pub(crate) fn route_outgoing_messages(
     ))
 }
 
+pub(crate) fn deploy_xrp_to_sidechain(
+    storage: &mut dyn Storage,
+    block_height: u64,
+    self_address: &Addr,
+    router: &Router,
+    its_hub: &Addr,
+    axelar_chain_name: &ChainName,
+    xrpl_chain_name: &ChainName,
+    sidechain_name: &ChainName,
+    params: HexBinary,
+) -> Result<Response, Error> {
+    let token_id = XRPLTokenOrXRP::XRP.token_id();
+    let its_msg = ItsHubMessage::SendToHub {
+        destination_chain: sidechain_name.clone(),
+        message: ItsMessage::DeployTokenManager {
+            token_id,
+            token_manager_type: TokenManagerType::LockUnlock,
+            params,
+        },
+    };
+
+    let payload = its_msg.abi_encode();
+
+    let msg = Message {
+        cc_id: generate_cross_chain_id(storage, block_height, xrpl_chain_name.clone())?,
+        source_address: Address::from_str(&self_address.to_string()).unwrap(),
+        destination_address: Address::from_str(its_hub.as_str()).unwrap(),
+        destination_chain: axelar_chain_name.clone(),
+        payload_hash: Keccak256::digest(payload.as_slice()).into(),
+    };
+
+    Ok(Response::new().add_messages(router.route(vec![msg.clone()])).add_event(GatewayEvent::RoutingIncoming { msg }.into()))
+}
+
+pub(crate) fn deploy_interchain_token(
+    storage: &mut dyn Storage,
+    block_height: u64,
+    self_address: &Addr,
+    router: &Router,
+    its_hub: &Addr,
+    axelar_chain_name: &ChainName,
+    xrpl_chain_name: &ChainName,
+    params: InterchainTokenDeployment,
+) -> Result<Response, Error> {
+    let token_id = params.xrpl_token.token_id();
+    let its_msg = ItsHubMessage::SendToHub {
+        destination_chain: params.destination_chain,
+        message: ItsMessage::DeployInterchainToken {
+            token_id,
+            name: params.name,
+            symbol: params.symbol,
+            decimals: params.decimals,
+            minter: params.minter,
+        }
+    };
+
+    let payload = its_msg.abi_encode();
+
+    let msg = Message {
+        cc_id: generate_cross_chain_id(storage, block_height, xrpl_chain_name.clone())?,
+        source_address: Address::from_str(&self_address.to_string()).unwrap(),
+        destination_address: Address::from_str(its_hub.as_str()).unwrap(),
+        destination_chain: axelar_chain_name.clone(),
+        payload_hash: Keccak256::digest(payload.as_slice()).into(),
+    };
+
+    Ok(Response::new().add_messages(router.route(vec![msg.clone()])).add_event(GatewayEvent::RoutingIncoming { msg }.into()))
+}
+
+fn generate_cross_chain_id(
+    storage: &mut dyn Storage,
+    block_height: u64,
+    chain_name: ChainName,
+) -> Result<CrossChainId, Error> {
+    // TODO: Retrieve the actual tx hash from core, since cosmwasm doesn't provide it.
+    // Use the block height as the placeholder in the meantime.
+    let message_id = HexTxHashAndEventIndex {
+        tx_hash: Uint256::from(block_height).to_be_bytes(),
+        event_index: state::ROUTABLE_MESSAGES_INDEX
+            .incr(storage)
+            .change_context(Error::EventIndex)?,
+    };
+
+    CrossChainId::new(chain_name, message_id).change_context(Error::InvalidCrossChainId)
+}
+
 fn apply(
     verifier: &xrpl_voting_verifier::Client,
     msgs: Vec<XRPLMessage>,
     action: impl Fn(Vec<(VerificationStatus, Vec<XRPLMessage>)>) -> (Option<WasmMsg>, Vec<Event>),
 ) -> Result<Response, Error> {
     check_for_duplicates(msgs)?
-        .then(|msgs| verifier.messages_status(msgs))
+        .then(|msgs| verifier.messages_status(msgs.into_iter().map(|m| m.into()).collect()))
         .change_context(Error::MessageStatus)?
         .then(group_by_status)
         .then(action)
@@ -129,19 +230,24 @@ fn verify(
 }
 
 fn route(
+    store: &dyn Storage,
+    self_address: &Addr,
     router: &Router,
-    msgs_by_status: Vec<(VerificationStatus, Vec<XRPLMessage>)>,
+    msgs_by_status: Vec<(VerificationStatus, Vec<XRPLMessageWithPayload>)>,
+    its_hub: &Addr,
+    axelar_chain_name: &ChainName,
 ) -> (Option<WasmMsg>, Vec<Event>) {
     msgs_by_status
         .into_iter()
         .map(|(status, msgs)| {
+            let msgs: Vec<Message> = msgs.iter().map(|m| to_its_message(store, self_address, m.clone(), its_hub, axelar_chain_name)).collect();
             (
                 filter_routable_messages(status, &msgs),
                 into_route_events(status, msgs),
             )
         })
         .then(flat_unzip)
-        .then(|(msgs, events)| (router.route(msgs.iter().map(|m| to_its_message(m.clone())).collect()), events))
+        .then(|(msgs, events)| (router.route(msgs), events))
 }
 
 // not all messages are verifiable, so it's better to only take a reference and allocate a vector on demand
@@ -174,7 +280,7 @@ fn into_verify_events(status: VerificationStatus, msgs: Vec<XRPLMessage>) -> Vec
 
 // not all messages are routable, so it's better to only take a reference and allocate a vector on demand
 // instead of requiring the caller to allocate a vector for every message
-fn filter_routable_messages(status: VerificationStatus, msgs: &[XRPLMessage]) -> Vec<XRPLMessage> {
+fn filter_routable_messages(status: VerificationStatus, msgs: &[Message]) -> Vec<Message> {
     if status == VerificationStatus::SucceededOnSourceChain {
         msgs.to_vec()
     } else {
@@ -182,7 +288,7 @@ fn filter_routable_messages(status: VerificationStatus, msgs: &[XRPLMessage]) ->
     }
 }
 
-fn into_route_events(status: VerificationStatus, msgs: Vec<XRPLMessage>) -> Vec<Event> {
+fn into_route_events(status: VerificationStatus, msgs: Vec<Message>) -> Vec<Event> {
     match status {
         VerificationStatus::SucceededOnSourceChain => {
             messages_into_events(msgs, |msg| GatewayEvent::RoutingIncoming { msg })
@@ -199,20 +305,47 @@ fn flat_unzip<A, B>(x: impl Iterator<Item = (Vec<A>, Vec<B>)>) -> (Vec<A>, Vec<B
     )
 }
 
-fn messages_into_events(msgs: Vec<XRPLMessage>, transform: fn(XRPLMessage) -> GatewayEvent) -> Vec<Event> {
+fn messages_into_events<T>(msgs: Vec<T>, transform: fn(T) -> GatewayEvent) -> Vec<Event> {
     msgs.into_iter().map(|msg| transform(msg).into()).collect()
 }
 
-fn to_its_message(msg: XRPLMessage) -> Message {
-    match msg.clone() {
+fn to_its_message(
+    store: &dyn Storage,
+    self_address: &Addr, // TODO: should be xrpl_multisig_address
+    msg: XRPLMessageWithPayload,
+    its_hub: &Addr,
+    axelar_chain_name: &ChainName,
+) -> Message {
+    match msg.message.clone() {
         XRPLMessage::ProverMessage(_tx_hash) => todo!(),
         XRPLMessage::UserMessage(user_message) => {
-            Message {
-                cc_id: msg.cc_id(),
-                source_address: Address::from_str(&user_message.source_address.to_string()).unwrap(),
+            let token_id: TokenId = match user_message.amount.clone() { // TODO: CASE-SENSITIVE?
+                XRPLPaymentAmount::Drops(_) => XRPLTokenOrXRP::XRP.token_id(),
+                XRPLPaymentAmount::Token(token, _) => state::XRPL_CURRENCY_TO_TOKEN_ID.load(store, token.currency.to_bytes()).unwrap(),
+            };
+
+            let interchain_transfer = ItsMessage::InterchainTransfer {
+                token_id,
+                source_address: HexBinary::from(&user_message.source_address.to_bytes()),
                 destination_address: user_message.destination_address,
+                amount: user_message.amount.into(),
+                data: msg.payload,
+            };
+
+            let its_msg = ItsHubMessage::SendToHub {
                 destination_chain: user_message.destination_chain,
-                payload_hash: user_message.payload_hash
+                message: interchain_transfer,
+            };
+
+            let payload = its_msg.abi_encode();
+
+            Message {
+                cc_id: msg.message.cc_id(),
+                // TODO: should be the xrpl_multisig_address, instead of the gateway address
+                source_address: Address::from_str(self_address.as_str()).unwrap(),
+                destination_address: Address::from_str(its_hub.as_str()).unwrap(),
+                destination_chain: axelar_chain_name.clone(),
+                payload_hash: Keccak256::digest(payload.as_slice()).into(),
             }
         },
     }

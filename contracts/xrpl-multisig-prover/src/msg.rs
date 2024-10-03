@@ -1,11 +1,10 @@
 use axelar_wasm_std::{MajorityThreshold, VerificationStatus};
-use interchain_token_service::TokenId;
 use router_api::CrossChainId;
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::{HexBinary, Uint64};
 use multisig::key::PublicKey;
 
-use xrpl_types::types::{TxHash, XRPLToken};
+use xrpl_types::types::TxHash;
 
 #[cw_serde]
 pub struct InstantiateMsg {
@@ -25,8 +24,6 @@ pub struct InstantiateMsg {
     pub next_sequence_number: u32,
     pub last_assigned_ticket_number: u32,
     pub governance_address: String,
-    pub relayer_address: String, // TODO: REMOVE
-    pub xrp_token_id: TokenId, // TODO: REMOVE
 }
 
 #[cw_serde]
@@ -65,11 +62,11 @@ pub enum GetProofResponse {
 
 #[cw_serde]
 pub enum ExecuteMsg {
-    RegisterToken {
-        token_id: HexBinary,
-        token: XRPLToken,
-        decimals: u8,
-    },
+    // RegisterToken {
+    //     token_id: HexBinary,
+    //     token: XRPLToken,
+    //     decimals: u8,
+    // },
     ConstructProof {
         message_id: CrossChainId,
         payload: HexBinary,
@@ -85,9 +82,4 @@ pub enum ExecuteMsg {
     UpdateSigningThreshold {
         new_signing_threshold: MajorityThreshold,
     },
-}
-
-#[cw_serde]
-pub struct MigrateMsg {
-    pub governance_address: String,
 }

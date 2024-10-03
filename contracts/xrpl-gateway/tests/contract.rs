@@ -10,7 +10,7 @@ use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info, MockQuerier}
 #[cfg(not(feature = "generate_golden_files"))]
 use cosmwasm_std::Response;
 use cosmwasm_std::{
-    from_json, to_json_binary, Addr, ContractResult, DepsMut, QuerierResult, WasmQuery,
+    from_json, to_json_binary, Addr, ContractResult, DepsMut, HexBinary, QuerierResult, WasmQuery
 };
 use sha3::{Keccak256, Digest};
 use xrpl_gateway::contract::*;
@@ -19,7 +19,7 @@ use itertools::Itertools;
 use rand::{thread_rng, Rng};
 use router_api::{ChainName, CrossChainId, Message};
 use serde::Serialize;
-use xrpl_types::msg::{UserMessage, XRPLHash, XRPLMessage};
+use xrpl_types::msg::{UserMessage, XRPLHash, XRPLMessage, XRPLMessageWithPayload};
 use xrpl_types::types::{XRPLAccountId, XRPLPaymentAmount};
 use xrpl_voting_verifier::msg::MessageStatus;
 
@@ -34,6 +34,7 @@ fn instantiate_works() {
             router_address: Addr::unchecked("router").into_string(),
             its_hub_address: Addr::unchecked("its_hub").into_string(),
             axelar_chain_name: ChainName::from_str("axelar").unwrap(),
+            xrpl_chain_name: ChainName::from_str("xrpl").unwrap(),
         },
     );
 
@@ -57,7 +58,7 @@ fn successful_verify() {
                 deps.as_mut(),
                 mock_env(),
                 mock_info("sender", &[]),
-                ExecuteMsg::VerifyMessages(msgs.clone()),
+                ExecuteMsg::VerifyMessages(msgs),
             )
             .unwrap(),
         )
@@ -104,7 +105,7 @@ fn successful_route_incoming() {
                 deps.as_mut(),
                 mock_env(),
                 mock_info("sender", &[]),
-                ExecuteMsg::RouteIncomingMessages(msgs.clone()),
+                ExecuteMsg::RouteIncomingMessages(messages_with_payload(msgs.clone())),
             )
             .unwrap(),
         )
@@ -203,11 +204,12 @@ fn verify_with_faulty_verifier_fails() {
 
     instantiate_contract(deps.as_mut(), "verifier", "router", "its_hub", ChainName::from_str("axelar").unwrap());
 
+    let msgs = generate_incoming_msgs("verifier in unreachable", 10);
     let response = execute(
         deps.as_mut(),
         mock_env(),
         mock_info("sender", &[]),
-        ExecuteMsg::VerifyMessages(generate_incoming_msgs("verifier in unreachable", 10)),
+        ExecuteMsg::VerifyMessages(msgs),
     );
 
     assert!(response.is_err());
@@ -220,11 +222,12 @@ fn route_incoming_with_faulty_verifier_fails() {
 
     instantiate_contract(deps.as_mut(), "verifier", "router", "its_hub", ChainName::from_str("axelar").unwrap());
 
+    let msgs = generate_incoming_msgs("verifier in unreachable", 10);
     let response = execute(
         deps.as_mut(),
         mock_env(),
         mock_info("sender", &[]),
-        ExecuteMsg::RouteIncomingMessages(generate_incoming_msgs("verifier in unreachable", 10)),
+        ExecuteMsg::RouteIncomingMessages(messages_with_payload(msgs)),
     );
 
     assert!(response.is_err());
@@ -248,11 +251,13 @@ fn incoming_calls_with_duplicate_ids_should_fail() {
         );
         assert!(response.is_err());
 
+        let msgs_with_payload = messages_with_payload(msgs.clone());
+
         let response = execute(
             deps.as_mut(),
             mock_env(),
             mock_info("sender", &[]),
-            ExecuteMsg::RouteIncomingMessages(msgs.clone()),
+            ExecuteMsg::RouteIncomingMessages(msgs_with_payload.clone()),
         );
         assert!(response.is_err());
 
@@ -260,7 +265,7 @@ fn incoming_calls_with_duplicate_ids_should_fail() {
             deps.as_mut(),
             mock_env(),
             mock_info(router, &[]),
-            ExecuteMsg::RouteIncomingMessages(msgs),
+            ExecuteMsg::RouteIncomingMessages(msgs_with_payload),
         );
         assert!(response.is_err());
     }
@@ -325,7 +330,7 @@ fn incoming_route_duplicate_ids_should_fail() {
             deps.as_mut(),
             mock_env(),
             mock_info("sender", &[]),
-            ExecuteMsg::RouteIncomingMessages(msgs),
+            ExecuteMsg::RouteIncomingMessages(messages_with_payload(msgs)),
         );
 
         assert!(response.is_err());
@@ -477,7 +482,10 @@ fn generate_incoming_msgs_with_all_statuses(
 ) -> HashMap<VerificationStatus, Vec<XRPLMessage>> {
     all_statuses()
         .into_iter()
-        .map(|status| (status, generate_incoming_msgs(status, count_per_status)))
+        .map(|status| {
+            let msgs = generate_incoming_msgs(status, count_per_status);
+            (status, msgs)
+        })
         .collect::<HashMap<VerificationStatus, Vec<_>>>()
 }
 
@@ -502,12 +510,19 @@ fn generate_incoming_msgs(namespace: impl Debug, count: u8) -> Vec<XRPLMessage> 
         .map(|i| XRPLMessage::UserMessage(UserMessage {
             tx_id: message_id(format!("{:?}{}", namespace, i).as_str()),
             amount: XRPLPaymentAmount::Drops(u64::from(i)*1_000_000),
-            destination_address: "idc".parse().unwrap(),
+            destination_address: HexBinary::from_hex("1dc").unwrap(),
             destination_chain: "mock-chain-2".parse().unwrap(),
             source_address: XRPLAccountId::from_bytes([0; 20]), // TODO: random
             payload_hash: [i; 32],
         }))
         .collect()
+}
+
+fn messages_with_payload(msgs: Vec<XRPLMessage>) -> Vec<XRPLMessageWithPayload> {
+    msgs.into_iter().map(|msg| XRPLMessageWithPayload {
+        message: msg,
+        payload: HexBinary::from_hex("0123456789abcdef").unwrap(),
+    }).collect()
 }
 
 #[allow(clippy::arithmetic_side_effects)]
@@ -588,7 +603,13 @@ fn update_query_handler<U: Serialize>(
     querier.update_wasm(handler)
 }
 
-fn instantiate_contract(deps: DepsMut, verifier: &str, router: &str, its_hub: &str, axelar_chain_name: ChainName) {
+fn instantiate_contract(
+    deps: DepsMut,
+    verifier: &str,
+    router: &str,
+    its_hub: &str,
+    axelar_chain_name: ChainName,
+) {
     let response = instantiate(
         deps,
         mock_env(),
@@ -598,6 +619,7 @@ fn instantiate_contract(deps: DepsMut, verifier: &str, router: &str, its_hub: &s
             router_address: Addr::unchecked(router).into_string(),
             its_hub_address: Addr::unchecked(its_hub).into_string(),
             axelar_chain_name,
+            xrpl_chain_name: ChainName::from_str("xrpl").unwrap(),
         }
         .clone(),
     );

@@ -1,6 +1,5 @@
 use crate::axelar_workers::VerifierSet;
 use axelar_wasm_std::MajorityThreshold;
-use interchain_token_service::TokenId;
 use router_api::CrossChainId;
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::Addr;
@@ -11,7 +10,6 @@ use xrpl_types::types::*;
 pub struct Config {
     pub admin: Addr,
     pub governance: Addr,
-    pub relayer: Addr,
     pub axelar_multisig: Addr,
     pub coordinator: Addr,
     pub gateway: Addr,
@@ -24,7 +22,6 @@ pub struct Config {
     pub xrpl_fee: u64,
     pub ticket_count_threshold: u32,
     pub key_type: multisig::key::KeyType,
-    pub xrp_token_id: TokenId, // TODO: remove
 }
 
 pub const CONFIG: Item<Config> = Item::new("config");
@@ -49,7 +46,13 @@ pub const AVAILABLE_TICKETS: Item<Vec<u32>> = Item::new("available_tickets");
 pub const TRANSACTION_INFO: Map<&TxHash, TransactionInfo> = Map::new("transaction_info");
 pub const LATEST_SEQUENTIAL_TX_HASH: Item<TxHash> = Item::new("latest_sequential_tx_hash");
 
-pub const TOKENS: Map<&String, (XRPLToken, u8)> = Map::new("tokens");
+#[cw_serde]
+pub struct TokenInfo {
+    pub xrpl_token: XRPLToken,
+    pub decimals: u8,
+}
+
+pub const TOKEN_ID_TO_TOKEN_INFO: Map<[u8; 32], TokenInfo> = Map::new("token_id_to_token_info");
 
 pub const CURRENT_VERIFIER_SET: Item<VerifierSet> = Item::new("current_verifier_set");
 pub const NEXT_VERIFIER_SET: Item<VerifierSet> = Item::new("next_verifier_set");

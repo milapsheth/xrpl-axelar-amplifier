@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use cosmwasm_std::Addr;
 use cw_multi_test::{App, ContractWrapper, Executor};
 use router_api::ChainName;
@@ -33,6 +35,7 @@ impl XRPLGatewayContract {
                     verifier_address: verifier_address.to_string(),
                     its_hub_address: its_hub_address.to_string(),
                     axelar_chain_name,
+                    xrpl_chain_name: ChainName::from_str("xrpl").unwrap(),
                 },
                 &[],
                 "xrpl_gateway",

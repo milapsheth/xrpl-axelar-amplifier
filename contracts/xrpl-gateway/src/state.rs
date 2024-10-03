@@ -1,7 +1,9 @@
+use axelar_wasm_std::counter::Counter;
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{Addr, Storage};
 use cw_storage_plus::{Item, Map};
 use error_stack::{Result, ResultExt};
+use interchain_token_service::TokenId;
 use router_api::{ChainName, CrossChainId, Message};
 
 #[cw_serde]
@@ -10,6 +12,7 @@ pub(crate) struct Config {
     pub router: Addr,
     pub its_hub: Addr,
     pub axelar_chain_name: ChainName,
+    pub xrpl_chain_name: ChainName,
 }
 
 pub(crate) fn save_config(storage: &mut dyn Storage, value: &Config) -> Result<(), Error> {
@@ -35,6 +38,8 @@ const CONFIG_NAME: &str = "config";
 const CONFIG: Item<Config> = Item::new(CONFIG_NAME);
 const OUTGOING_MESSAGES_NAME: &str = "outgoing_messages";
 pub const OUTGOING_MESSAGES: Map<&CrossChainId, Message> = Map::new(OUTGOING_MESSAGES_NAME);
+pub const XRPL_CURRENCY_TO_TOKEN_ID: Map<[u8; 20], TokenId> = Map::new("xrpl_currency_to_token_id");
+pub const ROUTABLE_MESSAGES_INDEX: Counter<u32> = Counter::new("routable_message_index");
 
 #[cfg(test)]
 mod test {
@@ -55,6 +60,7 @@ mod test {
             router: Addr::unchecked("router"),
             its_hub: Addr::unchecked("its_hub"),
             axelar_chain_name: ChainName::from_str("axelar").unwrap(),
+            xrpl_chain_name: ChainName::from_str("xrpl").unwrap(),
         };
         assert!(save_config(deps.as_mut().storage, &config).is_ok());
 

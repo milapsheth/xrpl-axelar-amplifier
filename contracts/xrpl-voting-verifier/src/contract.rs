@@ -6,12 +6,10 @@ use cosmwasm_std::{
     StdResult,
 };
 
-use crate::contract::migrations::v0_5_0;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
 use crate::state::{Config, CONFIG};
 
 mod execute;
-mod migrations;
 mod query;
 
 const CONTRACT_NAME: &str = env!("CARGO_PKG_NAME");
@@ -79,12 +77,10 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn migrate(
-    deps: DepsMut,
+    _deps: DepsMut,
     _env: Env,
     _msg: Empty,
 ) -> Result<Response, axelar_wasm_std::error::ContractError> {
-    v0_5_0::migrate(deps.storage)?;
-
     Ok(Response::default())
 }
 
@@ -97,7 +93,7 @@ mod test {
     use cosmwasm_std::testing::{
         mock_dependencies, mock_env, mock_info, MockApi, MockQuerier, MockStorage,
     };
-    use cosmwasm_std::{from_json, Addr, Empty, Fraction, OwnedDeps, Uint64, WasmQuery};
+    use cosmwasm_std::{from_json, Addr, Empty, Fraction, HexBinary, OwnedDeps, Uint64, WasmQuery};
     use service_registry::{
         AuthorizationState, BondingState, Verifier, WeightedVerifier, VERIFIER_WEIGHT,
     };
@@ -185,7 +181,7 @@ mod test {
                 tx_id: message_id("id"),
                 source_address: XRPLAccountId::from_bytes([0; 20]), // TODO: random
                 destination_chain: format!("destination-chain{i}").parse().unwrap(),
-                destination_address: format!("destination-address{i}").parse().unwrap(),
+                destination_address: HexBinary::from_hex("1234").unwrap(),
                 payload_hash: [0; 32],
                 amount: XRPLPaymentAmount::Drops(u64::from(i)*1_000_000),
             }))

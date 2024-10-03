@@ -1,10 +1,11 @@
+use std::str::FromStr;
+
 use axelar_wasm_std::VerificationStatus;
 use router_api::{Address, CrossChainId, Message};
 use cosmwasm_std::{Addr, HexBinary, Uint128, Uint256};
 use multisig::key::KeyType;
 use integration_tests::contract::Contract;
-use test_utils::XRP_TOKEN_ID;
-use xrpl_types::msg::XRPLMessage;
+use xrpl_types::{msg::{CrossChainMessage, UserMessage, XRPLMessage, XRPLMessageWithPayload}, types::{XRPLAccountId, XRPLPaymentAmount, XRPLTokenOrXRP}};
 use interchain_token_service::{ItsHubMessage, ItsMessage};
 use ethers_core::utils::keccak256;
 
@@ -182,6 +183,174 @@ fn xrpl_ticket_create_can_be_proven() {
 }
 
 #[test]
+fn payment_from_xrpl_can_be_verified_and_routed_and_proven() {
+    let test_utils::XRPLSourceTestCase {
+        mut protocol,
+        xrpl,
+        axelarnet,
+        its_hub,
+        destination_chain,
+        verifiers,
+        ..
+    } = test_utils::setup_xrpl_source_test_case();
+
+    let source_address: XRPLAccountId = XRPLAccountId::from_str("raNVNWvhUQzFkDDTdEw3roXRJfMJFVJuQo").unwrap();
+    let destination_address: HexBinary = HexBinary::from_hex("95181d16cfb23Bc493668C17d973F061e30F2EAF").unwrap();
+
+    let destination_chain_name = destination_chain.chain_name.clone();
+    let amount = XRPLPaymentAmount::Drops(1000000); // 1 XRP
+    let payload = HexBinary::from(vec![0]); // TODO: should be empty
+
+    let xrpl_msg = XRPLMessage::UserMessage(UserMessage {
+        tx_id: [0; 32], // TODO
+        source_address: source_address.clone(),
+        destination_chain: destination_chain_name.clone(),
+        destination_address: destination_address.clone(),
+        payload_hash: [0; 32],
+        amount,
+    });
+
+    let xrpl_msg_with_payload = XRPLMessageWithPayload {
+        message: xrpl_msg.clone(),
+        payload: payload.clone(),
+    };
+
+    let interchain_transfer_msg = ItsMessage::InterchainTransfer {
+        token_id: XRPLTokenOrXRP::XRP.token_id(),
+        source_address: HexBinary::from(source_address.to_bytes()),
+        destination_address,
+        amount: Uint256::from(1000000000000000000u128),
+        // amount: Uint256::from(1000000u128), // 1 XRP
+        data: payload,
+    };
+
+    println!("interchain_transfer_msg: {:?}", interchain_transfer_msg);
+
+    let wrapped_payload = ItsHubMessage::SendToHub {
+        message: interchain_transfer_msg.clone(),
+        destination_chain: destination_chain_name.clone(),
+    }.abi_encode();
+
+    let wrapped_msg = Message {
+        cc_id: CrossChainId {
+            source_chain: xrpl.chain_name.clone().into(),
+            message_id: "0x0000000000000000000000000000000000000000000000000000000000000000-0"
+                .to_string()
+                .try_into()
+                .unwrap(),
+        },
+        source_address: Address::from_str(xrpl.gateway.contract_addr.as_str()).unwrap(), // TODO: should be xrpl.its_address == xrpl_multisig_address
+        destination_address: Address::try_from(its_hub.contract_addr.to_string()).unwrap(),
+        destination_chain: axelarnet.chain_name.clone(),
+        payload_hash: keccak256(wrapped_payload.clone()),
+    };
+
+    let wrapped_msgs = vec![wrapped_msg.clone()];
+    let xrpl_msgs = vec![xrpl_msg.clone()];
+    let xrpl_msgs_with_payload = vec![xrpl_msg_with_payload.clone()];
+    let xrpl_msg_ids = vec![xrpl_msg.cc_id().clone()];
+
+    // start the flow by submitting the message to the gateway
+    let (poll_id, expiry) =
+        test_utils::verify_xrpl_messages(&mut protocol.app, &xrpl.gateway, &xrpl_msgs);
+
+    // do voting
+    test_utils::vote_success(
+        &mut protocol.app,
+        &xrpl.voting_verifier,
+        xrpl_msgs.len(),
+        &verifiers,
+        poll_id,
+    );
+
+    test_utils::advance_at_least_to_height(&mut protocol.app, expiry);
+
+    test_utils::end_poll(&mut protocol.app, &xrpl.voting_verifier, poll_id);
+
+    // should be verified, now route
+    test_utils::route_xrpl_messages(&mut protocol.app, &xrpl.gateway, &xrpl_msgs_with_payload);
+
+    // check that the message can be found at the outgoing gateway
+    let executable_msgs =
+        test_utils::executable_messages_from_axelarnet_gateway(&mut protocol.app, &axelarnet.gateway, &xrpl_msg_ids);
+    assert_eq!(executable_msgs.len(), 1);
+    if let axelarnet_gateway::ExecutableMessage::Approved(approved_msg) = executable_msgs.first().unwrap() {
+        assert_eq!(*approved_msg, wrapped_msg)
+    } else {
+        unreachable!()
+    };
+
+    let its_hub_msg_id = test_utils::execute_axelarnet_gateway_message(
+        &mut protocol,
+        &axelarnet.gateway,
+        wrapped_msg.cc_id.clone(),
+        HexBinary::from(wrapped_payload),
+    );
+
+    test_utils::route_axelarnet_gateway_messages(
+        &mut protocol,
+        &axelarnet.gateway,
+        wrapped_msgs.clone(),
+    );
+
+    let its_hub_msg_ids = vec![CrossChainId::new(axelarnet.chain_name.clone(), its_hub_msg_id).unwrap()];
+    let routable_msgs =
+        test_utils::routable_messages_from_axelarnet_gateway(&mut protocol.app, &axelarnet.gateway, &its_hub_msg_ids);
+    assert_eq!(routable_msgs.len(), 1);
+
+    // check that the message can be found at the outgoing gateway
+    let found_msgs =
+        test_utils::messages_from_gateway(&mut protocol.app, &destination_chain.gateway, &its_hub_msg_ids);
+    assert_eq!(found_msgs, routable_msgs);
+
+    // trigger signing and submit all necessary signatures
+    let session_id = test_utils::construct_proof_and_sign(
+        &mut protocol,
+        &destination_chain.multisig_prover,
+        &routable_msgs,
+        &verifiers,
+    );
+
+    let proof = test_utils::proof(&mut protocol.app, &destination_chain.multisig_prover, &session_id);
+
+    // proof should be complete by now
+    assert!(matches!(
+        proof.status,
+        multisig_prover::msg::ProofStatus::Completed { .. }
+    ));
+    assert_eq!(proof.message_ids, its_hub_msg_ids);
+
+    // Advance the height to be able to distribute rewards
+    test_utils::advance_height(
+        &mut protocol.app,
+        u64::from(protocol.rewards_params.epoch_duration) * 2,
+    );
+
+    test_utils::distribute_rewards(
+        &mut protocol,
+        &xrpl.chain_name,
+        xrpl.voting_verifier.contract_addr.clone(),
+    );
+
+    let protocol_multisig_address = protocol.multisig.contract_addr.clone();
+    test_utils::distribute_rewards(&mut protocol, &destination_chain_name, protocol_multisig_address);
+
+    // rewards split evenly amongst all verifiers, but there are two contracts that rewards should have been distributed for
+    let expected_rewards = Uint128::from(protocol.rewards_params.rewards_per_epoch)
+        / Uint128::from(verifiers.len() as u64)
+        * Uint128::from(2u64);
+
+    for verifier in verifiers {
+        let balance = protocol
+            .app
+            .wrap()
+            .query_balance(verifier.addr, AXL_DENOMINATION)
+            .unwrap();
+        assert_eq!(balance.amount, expected_rewards);
+    }
+}
+
+#[test]
 fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
     let test_utils::XRPLDestinationTestCase {
         mut protocol,
@@ -204,11 +373,11 @@ fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
         .unwrap();
 
     let destination_chain = xrpl.chain_name.clone();
-    let amount = Uint256::from(1000000u32);
+    let amount = Uint256::from(1000000000000000000u64);
     let data = HexBinary::from(vec![0]); // TODO: should be empty
 
     let interchain_transfer_msg = ItsMessage::InterchainTransfer {
-        token_id: XRP_TOKEN_ID.into(),
+        token_id: XRPLTokenOrXRP::XRP.token_id(),
         source_address: HexBinary::from(source_address.as_bytes()),
         destination_address: HexBinary::from(destination_address.as_bytes()),
         amount,
@@ -372,6 +541,7 @@ fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
         assert_eq!(balance.amount, expected_rewards);
     }
 }
+
 
 #[test]
 fn routing_to_incorrect_gateway_interface() {

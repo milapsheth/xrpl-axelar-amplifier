@@ -53,6 +53,8 @@ thiserror = { workspace = true }
 xrpl-types = { workspace = true }
 xrpl-voting-verifier = { workspace = true, features = ["library"] }
 msgs-derive = { workspace = true }
+interchain-token-service = { workspace = true, features = ["library"] }
+sha3 = { workspace = true }
 
 [dev-dependencies]
 cw-multi-test = "0.15.1"

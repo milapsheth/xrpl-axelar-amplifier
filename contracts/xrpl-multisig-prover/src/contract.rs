@@ -5,7 +5,7 @@ use axelar_wasm_std::{MajorityThreshold, VerificationStatus};
 use interchain_token_service::ItsHubMessage;
 use router_api::{ChainName, CrossChainId};
 use cosmwasm_std::{
-    entry_point, to_json_binary, wasm_execute, Addr, Binary, Deps, DepsMut, Env, Fraction, HexBinary, MessageInfo, Reply, Response, StdResult, Storage, SubMsg, Uint128, Uint64
+    entry_point, to_json_binary, wasm_execute, Addr, Binary, Deps, DepsMut, Empty, Env, Fraction, HexBinary, MessageInfo, Reply, Response, StdResult, Storage, SubMsg, Uint128, Uint256, Uint64
 };
 
 use multisig::{key::PublicKey, types::MultisigState};
@@ -14,16 +14,17 @@ use xrpl_types::error::XRPLError;
 use xrpl_types::msg::XRPLMessage;
 use xrpl_types::types::*;
 
+use crate::state::TOKEN_ID_TO_TOKEN_INFO;
 use crate::{
     axelar_workers::{self, VerifierSet},
     error::ContractError,
-    msg::{ExecuteMsg, InstantiateMsg, MigrateMsg, QueryMsg},
+    msg::{ExecuteMsg, InstantiateMsg, QueryMsg},
     querier::{Querier, XRPL_CHAIN_NAME},
     query, reply,
     state::{
         Config, AVAILABLE_TICKETS, CONFIG, CURRENT_VERIFIER_SET, LAST_ASSIGNED_TICKET_NUMBER,
         MESSAGE_ID_TO_MULTISIG_SESSION_ID, MULTISIG_SESSION_ID_TO_TX_HASH, NEXT_SEQUENCE_NUMBER,
-        NEXT_VERIFIER_SET, REPLY_MESSAGE_ID, REPLY_TX_HASH, TOKENS, TRANSACTION_INFO,
+        NEXT_VERIFIER_SET, REPLY_MESSAGE_ID, REPLY_TX_HASH, TRANSACTION_INFO,
     },
     types::*,
     xrpl_multisig,
@@ -60,10 +61,8 @@ pub fn instantiate(
     Ok(Response::default())
 }
 
-// STOP USING LAST SEQUENTIAL TX
-
+// TODO: STOP USING LAST SEQUENTIAL TX
 // store last verifier set tx, keep it up to date, if competing tx is confirmed, mark it as rejected
-
 
 fn make_config(
     deps: &DepsMut,
@@ -71,7 +70,6 @@ fn make_config(
 ) -> Result<Config, axelar_wasm_std::error::ContractError> {
     let admin = deps.api.addr_validate(&msg.admin_address)?;
     let governance = deps.api.addr_validate(&msg.governance_address)?;
-    let relayer = deps.api.addr_validate(&msg.relayer_address)?;
     let axelar_multisig = deps.api.addr_validate(&msg.axelar_multisig_address)?;
     let coordinator = deps.api.addr_validate(&msg.coordinator_address)?;
     let gateway = deps.api.addr_validate(&msg.gateway_address)?;
@@ -87,7 +85,6 @@ fn make_config(
     Ok(Config {
         admin,
         governance,
-        relayer,
         axelar_multisig,
         coordinator,
         gateway,
@@ -100,7 +97,6 @@ fn make_config(
         xrpl_fee: msg.xrpl_fee,
         ticket_count_threshold: msg.ticket_count_threshold,
         key_type: multisig::key::KeyType::Ecdsa,
-        xrp_token_id: msg.xrp_token_id,
     })
 }
 
@@ -118,26 +114,16 @@ pub fn require_governance(deps: &DepsMut, info: MessageInfo) -> Result<(), Contr
     }
 }
 
-pub fn require_permissioned_relayer(
-    deps: &DepsMut,
-    info: MessageInfo,
-) -> Result<(), ContractError> {
-    match CONFIG.load(deps.storage)?.relayer {
-        governance if governance == info.sender => Ok(()),
-        _ => Err(ContractError::Unauthorized),
-    }
-}
-
-fn register_token(
-    storage: &mut dyn Storage,
-    token_id: HexBinary,
-    token: &XRPLToken,
-    decimals: u8,
-) -> Result<Response, ContractError> {
-    // Validate token_id
-    TOKENS.save(storage, &token_id.to_string(), &(token.clone(), decimals))?;
-    Ok(Response::default())
-}
+// fn register_token(
+//     storage: &mut dyn Storage,
+//     token_id: HexBinary,
+//     token: &XRPLToken,
+//     decimals: u8,
+// ) -> Result<Response, ContractError> {
+//     // TODO: Validate token_id
+//     TOKEN_ID_TO_TOKEN_INFO.save(storage, &token_id.to_string(), &(token.clone(), decimals))?;
+//     Ok(Response::default())
+// }
 
 pub fn update_signing_threshold(
     deps: DepsMut,
@@ -164,18 +150,38 @@ pub fn execute(
     let querier = Querier::new(deps.querier, config.clone());
 
     let res = match msg {
-        ExecuteMsg::RegisterToken {
-            token_id,
-            token,
-            decimals,
-        } => {
-            require_admin(&deps, info.clone())
-                .or_else(|_| require_governance(&deps, info.clone()))?;
-            register_token(deps.storage, token_id, &token, decimals)
-        }
-        // TODO: coin should be info.funds
+        // ExecuteMsg::TrustSet { xrpl_token } => {
+        //     // TODO
+        // }
+        // ExecuteMsg::RegisterToken {
+        //     token_id,
+        //     token,
+        //     decimals,
+        // } => {
+        //     require_admin(&deps, info.clone())
+        //         .or_else(|_| require_governance(&deps, info.clone()))?;
+        //     register_token(deps.storage, token_id, &token, decimals)
+        // }
+        // ExecuteMsg::DeployInterchainToken {
+        //     destination_chain,
+        //     token_id,
+        //     name,
+        //     symbol,
+        //     decimals,
+        //     minter,
+        //     xrpl_token,
+        // } => {
+        //     require_admin(&deps, info.clone())
+        //         .or_else(|_| require_governance(&deps, info.clone()))?;
+        //     register_token(deps.storage, token_id, &token, decimals);
+        //     Response::new()
+        //         .add_message(wasm_execute(
+        //             config.gateway,
+        //             vec![],
+        //             vec![],
+        //         )?)
+        // }
         ExecuteMsg::ConstructProof { message_id, payload } => {
-            require_permissioned_relayer(&deps, info)?;
             construct_payment_proof(
                 deps.storage,
                 &querier,
@@ -220,6 +226,12 @@ pub fn execute(
     Ok(res)
 }
 
+fn scale_down_to_drops(amount: Uint256) -> u64 {
+    let scaling_factor = Uint256::from(1_000_000_000_000u64);
+    let new_amount = Uint128::try_from(amount / scaling_factor).unwrap();
+    u64::try_from(new_amount.u128()).unwrap()
+}
+
 fn construct_payment_proof(
     storage: &mut dyn Storage,
     querier: &Querier,
@@ -229,11 +241,6 @@ fn construct_payment_proof(
     message_id: CrossChainId,
     payload: HexBinary,
 ) -> Result<Response, ContractError> {
-    // if info.funds.len() != 1 {
-    // if coin.amount == cosmwasm_std::Uint128::zero() {
-    //     return Err(ContractError::InvalidPaymentAmount);
-    // }
-
     // Prevent creating a duplicate signing session before the previous one expires
     if let Some(multisig_session_id) =
         MESSAGE_ID_TO_MULTISIG_SESSION_ID.may_load(storage, &message_id)?
@@ -273,17 +280,17 @@ fn construct_payment_proof(
     }?;
 
     let (token_id, source_address, destination_address, amount, data) = its_transfer;
-    let amount = Uint128::try_from(amount).unwrap();
-    let xrpl_payment_amount = if token_id == config.xrp_token_id {
-        let drops =
-            u64::try_from(amount.u128()).map_err(|_| ContractError::InvalidAmount {
-                reason: "overflow".to_string(),
-            })?;
-        XRPLPaymentAmount::Drops(drops)
+    // let amount = Uint128::try_from(amount).unwrap();
+    let xrpl_payment_amount = if token_id == XRPLTokenOrXRP::XRP.token_id() {
+        // let drops =
+        //     u64::try_from(amount.u128()).map_err(|_| ContractError::InvalidAmount {
+        //         reason: "overflow".to_string(),
+        //     })?;
+        XRPLPaymentAmount::Drops(scale_down_to_drops(amount))
     } else {
-        let (xrpl_token, decimals) = TOKENS.load(storage, &HexBinary::from(<[u8; 32]>::from(token_id)).to_string())?;
-        // TODO: handle decimal precision conversion between CosmWasm Coin and XRPLToken
-        XRPLPaymentAmount::Token(xrpl_token, canonicalize_coin_amount(amount, decimals)?)
+        let token_info = TOKEN_ID_TO_TOKEN_INFO.load(storage, <[u8; 32]>::from(token_id))?;
+        // TODO: handle decimal precision conversion
+        XRPLPaymentAmount::Token(token_info.xrpl_token, canonicalize_coin_amount(Uint128::try_from(amount).unwrap(), token_info.decimals)?)
     };
 
     let tx_hash = xrpl_multisig::issue_payment(
@@ -591,17 +598,9 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn migrate(
-    deps: DepsMut,
+    _deps: DepsMut,
     _env: Env,
-    msg: MigrateMsg,
+    _msg: Empty,
 ) -> Result<Response, axelar_wasm_std::error::ContractError> {
-    let old_config = CONFIG.load(deps.storage)?;
-    let governance = deps.api.addr_validate(&msg.governance_address)?;
-    let new_config = Config {
-        governance,
-        ..old_config
-    };
-    CONFIG.save(deps.storage, &new_config)?;
-
     Ok(Response::default())
 }

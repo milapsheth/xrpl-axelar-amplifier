@@ -6,11 +6,9 @@ use cosmwasm_std::{Binary, Deps, DepsMut, Empty, Env, MessageInfo, Response};
 use crate::msg::{ExecuteMsg, QueryMsg};
 use router_api::CrossChainId;
 
-use crate::contract::migrations::v0_2_3;
 use crate::msg::InstantiateMsg;
 
 mod execute;
-mod migrations;
 mod query;
 
 const CONTRACT_NAME: &str = env!("CARGO_PKG_NAME");
@@ -18,11 +16,10 @@ const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn migrate(
-    deps: DepsMut,
+    _deps: DepsMut,
     _env: Env,
     _msg: Empty,
 ) -> Result<Response, axelar_wasm_std::error::ContractError> {
-    v0_2_3::migrate(deps.storage)?;
     Ok(Response::default())
 }
 
@@ -80,6 +77,12 @@ pub enum Error {
     RouterOnly,
     #[error("invalid message with ID {0}")]
     InvalidMessage(CrossChainId),
+    #[error("invalid cross-chain id")]
+    InvalidCrossChainId,
+    #[error("unable to generate event index")]
+    EventIndex,
+    #[error("caller does not have the required permissions")]
+    InvalidPermissions,
 }
 
 mod internal {
@@ -118,7 +121,7 @@ mod internal {
             .change_context(Error::InvalidAddress)
             .attach_printable(msg.its_hub_address)?;
 
-        state::save_config(deps.storage, &Config { verifier, router, its_hub, axelar_chain_name: msg.axelar_chain_name })
+        state::save_config(deps.storage, &Config { verifier, router, its_hub, axelar_chain_name: msg.axelar_chain_name, xrpl_chain_name: msg.xrpl_chain_name })
             .change_context(Error::InvalidStoreAccess)?;
 
         Ok(Response::new())
@@ -126,7 +129,7 @@ mod internal {
 
     pub(crate) fn execute(
         deps: DepsMut,
-        _env: Env,
+        env: Env,
         info: MessageInfo,
         msg: ExecuteMsg,
     ) -> Result<Response, Error> {
@@ -137,7 +140,33 @@ mod internal {
             address: config.router,
         };
 
-        match msg {
+        match msg.ensure_permissions(deps.storage, &info.sender).map_err(|_| Error::InvalidPermissions)? {
+            // TODO: only admin
+            ExecuteMsg::DeployXRPToSidechain {
+                sidechain_name,
+                params,
+            } => contract::execute::deploy_xrp_to_sidechain(
+                deps.storage,
+                env.block.height,
+                &env.contract.address,
+                &router,
+                &config.its_hub,
+                &config.axelar_chain_name,
+                &config.xrpl_chain_name,
+                &sidechain_name,
+                params,
+            ),
+            // TODO: only admin
+            ExecuteMsg::DeployInterchainToken(params) => contract::execute::deploy_interchain_token(
+                deps.storage,
+                env.block.height,
+                &env.contract.address,
+                &router,
+                &config.its_hub,
+                &config.axelar_chain_name,
+                &config.xrpl_chain_name,
+                params,
+            ),
             ExecuteMsg::VerifyMessages(msgs) => contract::execute::verify_messages(&verifier, msgs),
             ExecuteMsg::RouteMessages(msgs) => {
                 if info.sender != router.address {
@@ -146,7 +175,15 @@ mod internal {
 
                 contract::execute::route_outgoing_messages(deps.storage, msgs, config.its_hub, config.axelar_chain_name)
             },
-            ExecuteMsg::RouteIncomingMessages(msgs) => contract::execute::route_incoming_messages(&verifier, &router, msgs)
+            ExecuteMsg::RouteIncomingMessages(msgs) => contract::execute::route_incoming_messages(
+                deps.storage,
+                &env.contract.address,
+                &verifier,
+                &router,
+                msgs,
+                &config.its_hub,
+                &config.axelar_chain_name,
+            ),
         }
     }
 

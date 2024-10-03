@@ -6,8 +6,8 @@ pub enum GatewayEvent {
     Verifying { msg: XRPLMessage },
     AlreadyVerified { msg: XRPLMessage },
     AlreadyRejected { msg: XRPLMessage },
-    RoutingIncoming { msg: XRPLMessage },
-    UnfitForRouting { msg: XRPLMessage },
+    RoutingIncoming { msg: Message },
+    UnfitForRouting { msg: Message },
     RoutingOutgoing { msg: Message },
 }
 

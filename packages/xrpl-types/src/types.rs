@@ -3,6 +3,7 @@ use std::fmt::Display;
 use std::str::FromStr;
 
 use axelar_wasm_std::VerificationStatus;
+use interchain_token_service::TokenId;
 use router_api::CrossChainId;
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{from_json, Binary, HexBinary, StdResult, Uint128, Uint256};
@@ -13,6 +14,7 @@ use multisig::key::PublicKey;
 use multisig::key::Signature;
 use ripemd::Ripemd160;
 use sha2::{Digest, Sha256};
+use sha3::Keccak256;
 
 use crate::error::XRPLError;
 use axelar_wasm_std::Participant;
@@ -140,10 +142,49 @@ pub struct XRPLToken {
 }
 
 #[cw_serde]
+pub enum XRPLTokenOrXRP {
+    Token(XRPLToken),
+    XRP,
+}
+
+const ITS_INTERCHAIN_TOKEN_ID: &[u8] = "its-interchain-token-id".as_bytes();
+
+impl XRPLTokenOrXRP {
+    pub fn token_id(&self) -> TokenId {
+        let (deployer, salt) = match self {
+            XRPLTokenOrXRP::Token(token) => {
+                (token.issuer.0, token.currency.clone().to_bytes().to_vec())
+            },
+            XRPLTokenOrXRP::XRP => ([0u8; 20], "XRP".as_bytes().to_vec()),
+        };
+        let prefix = Keccak256::digest(ITS_INTERCHAIN_TOKEN_ID);
+        let token_id = Keccak256::digest(vec![prefix.as_slice(), &deployer, salt.as_slice()].concat());
+        let token_id_slice: &[u8; 32] = token_id.as_ref();
+        TokenId::new(token_id_slice.clone())
+    }
+}
+
+fn scale_up_xrp(drops: u64) -> Uint256 {
+    let drops_uint256 = Uint256::from(drops);
+    let scaling_factor = Uint256::from(1_000_000_000_000u64);
+    drops_uint256 * scaling_factor
+}
+
+#[cw_serde]
 #[derive(Eq, Hash)]
 pub enum XRPLPaymentAmount {
     Drops(u64),
     Token(XRPLToken, XRPLTokenAmount),
+}
+
+impl From<XRPLPaymentAmount> for Uint256 {
+    fn from(amount: XRPLPaymentAmount) -> Self {
+        match amount {
+            // TODO: REMOVE SCALING
+            XRPLPaymentAmount::Drops(drops) => scale_up_xrp(drops),
+            XRPLPaymentAmount::Token(_, token_amount) => Uint256::from(token_amount.mantissa), // TODO: FIX
+        }
+    }
 }
 
 // TODO: delete this

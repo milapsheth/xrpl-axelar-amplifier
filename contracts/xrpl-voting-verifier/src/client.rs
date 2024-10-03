@@ -73,7 +73,7 @@ impl<'a> Client<'a> {
 mod test {
     use axelar_wasm_std::{Threshold, VerificationStatus};
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info, MockQuerier};
-    use cosmwasm_std::{from_json, Addr, DepsMut, QuerierWrapper, Uint64, WasmQuery};
+    use cosmwasm_std::{from_json, Addr, DepsMut, HexBinary, QuerierWrapper, Uint64, WasmQuery};
     use xrpl_types::msg::*;
     use xrpl_types::types::XRPLPaymentAmount;
 
@@ -89,7 +89,7 @@ mod test {
         let msg_1 = XRPLMessage::UserMessage(UserMessage {
             tx_id: [0; 32],
             source_address: "0x1234".parse().unwrap(),
-            destination_address: "0x5678".parse().unwrap(),
+            destination_address: HexBinary::from_hex("5678").unwrap(),
             destination_chain: "eth".parse().unwrap(),
             payload_hash: [0; 32],
             amount: XRPLPaymentAmount::Drops(100),
@@ -98,7 +98,7 @@ mod test {
         let msg_2 = XRPLMessage::UserMessage(UserMessage {
             tx_id: [1; 32],
             source_address: "0x4321".parse().unwrap(),
-            destination_address: "0x8765".parse().unwrap(),
+            destination_address: HexBinary::from_hex("5678").unwrap(),
             destination_chain: "eth".parse().unwrap(),
             payload_hash: [0; 32],
             amount: XRPLPaymentAmount::Drops(200),

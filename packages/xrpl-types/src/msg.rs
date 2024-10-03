@@ -16,6 +16,26 @@ pub struct MemoDetails {
 
 pub type XRPLHash = [u8; 32];
 
+
+#[cw_serde]
+#[derive(Eq, Hash)]
+pub struct XRPLMessageWithPayload {
+    pub message: XRPLMessage,
+    pub payload: HexBinary,
+}
+
+impl From<XRPLMessageWithPayload> for XRPLMessage {
+    fn from(other: XRPLMessageWithPayload) -> Self {
+        other.message
+    }
+}
+
+impl CrossChainMessage for XRPLMessageWithPayload {
+    fn cc_id(&self) -> CrossChainId {
+        self.message.cc_id()
+    }
+}
+
 #[cw_serde]
 #[derive(Eq, Hash)]
 pub enum XRPLMessage {
@@ -45,7 +65,7 @@ pub struct UserMessage {
     pub tx_id: XRPLHash, // TODO: use TxHash from xrpl_multisig_prover
     pub source_address: XRPLAccountId,
     pub destination_chain: ChainName,
-    pub destination_address: Address,
+    pub destination_address: HexBinary,
     /// for better user experience, the payload hash gets encoded into hex at the edges (input/output),
     /// but internally, we treat it as raw bytes to enforce its format.
     #[serde(with = "axelar_wasm_std::hex")]
@@ -103,7 +123,7 @@ impl UserMessage {
         hasher.update(delimiter_bytes);
         hasher.update(self.destination_chain.as_ref());
         hasher.update(delimiter_bytes);
-        hasher.update(self.destination_address.as_str());
+        hasher.update(self.destination_address.as_ref());
         hasher.update(delimiter_bytes);
         hasher.update(self.payload_hash);
 
@@ -123,6 +143,10 @@ impl CrossChainMessage for Message {
 
 impl CrossChainMessage for XRPLMessage {
     fn cc_id(&self) -> CrossChainId {
-        CrossChainId { source_chain: ChainNameRaw::from_str(CHAIN_NAME).unwrap(), message_id: HexBinary::from(self.tx_id()).to_string().try_into().unwrap() }
+        CrossChainId {
+            source_chain: ChainNameRaw::from_str(CHAIN_NAME).unwrap(),
+            // TODO: don't use event index format
+            message_id: format!("0x{}-0", HexBinary::from(self.tx_id()).to_string()).try_into().unwrap(),
+        }
     }
 }

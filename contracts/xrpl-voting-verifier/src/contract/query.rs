@@ -121,7 +121,7 @@ mod tests {
     use axelar_wasm_std::voting::{PollId, Tallies, Vote, WeightedPoll};
     use axelar_wasm_std::{nonempty, Participant, Snapshot, Threshold};
     use cosmwasm_std::testing::{mock_dependencies, mock_env};
-    use cosmwasm_std::{Addr, Uint128, Uint64};
+    use cosmwasm_std::{Addr, HexBinary, Uint128, Uint64};
     use itertools::Itertools;
     use xrpl_types::msg::UserMessage;
     use xrpl_types::types::XRPLPaymentAmount;
@@ -285,7 +285,7 @@ mod tests {
             tx_id: [0; 32],
             source_address: format!("source-address{id}").parse().unwrap(),
             destination_chain: format!("destination-chain{id}").parse().unwrap(),
-            destination_address: format!("destination-address{id}").parse().unwrap(),
+            destination_address: HexBinary::from_hex("1234").unwrap(),
             payload_hash: [0; 32],
             amount: XRPLPaymentAmount::Drops(100),
         })
