@@ -32,7 +32,6 @@ type Result<T> = error_stack::Result<T, Error>;
 #[try_from("wasm-messages_poll_started")]
 struct PollStartedEvent {
     poll_id: PollId,
-    source_chain: ChainName,
     source_gateway_address: XRPLAddress,
     confirmation_height: u64,
     expires_at: u64,
@@ -93,7 +92,6 @@ where
 
         let PollStartedEvent {
             poll_id,
-            source_chain,
             source_gateway_address,
             messages,
             expires_at,
@@ -143,7 +141,6 @@ where
         }
 
         let poll_id_str: String = poll_id.into();
-        let source_chain_str: String = source_chain.into();
         let message_ids = messages
             .iter()
             .map(|message| {
@@ -154,7 +151,6 @@ where
         let votes = info_span!(
             "verify messages from XRPL chain",
             poll_id = poll_id_str,
-            source_chain = source_chain_str,
             message_ids = message_ids.as_value()
         )
         .in_scope(|| {
