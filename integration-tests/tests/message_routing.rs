@@ -224,8 +224,6 @@ fn payment_from_xrpl_can_be_verified_and_routed_and_proven() {
         data: payload,
     };
 
-    println!("interchain_transfer_msg: {:?}", interchain_transfer_msg);
-
     let wrapped_payload = ItsHubMessage::SendToHub {
         message: interchain_transfer_msg.clone(),
         destination_chain: destination_chain_name.clone(),
@@ -402,19 +400,19 @@ fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
         destination_chain: axelarnet.chain_name.clone(),
         payload_hash: keccak256(wrapped_payload.clone()),
     };
-    let msg_id: CrossChainId = wrapped_msg.cc_id.clone();
-    let msgs = vec![wrapped_msg.clone()];
-    let msg_ids = vec![msg_id.clone()];
+    let wrapped_msg_id: CrossChainId = wrapped_msg.cc_id.clone();
+    let wrapped_msgs = vec![wrapped_msg.clone()];
+    let wrapped_msg_ids = vec![wrapped_msg_id.clone()];
 
     // start the flow by submitting the message to the gateway
     let (poll_id, expiry) =
-        test_utils::verify_messages(&mut protocol.app, &source_chain.gateway, &msgs);
+        test_utils::verify_messages(&mut protocol.app, &source_chain.gateway, &wrapped_msgs);
 
     // do voting
     test_utils::vote_success(
         &mut protocol.app,
         &source_chain.voting_verifier,
-        msgs.len(),
+        wrapped_msgs.len(),
         &verifiers,
         poll_id,
     );
@@ -424,11 +422,11 @@ fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
     test_utils::end_poll(&mut protocol.app, &source_chain.voting_verifier, poll_id);
 
     // should be verified, now route
-    test_utils::route_messages(&mut protocol.app, &source_chain.gateway, &msgs);
+    test_utils::route_messages(&mut protocol.app, &source_chain.gateway, &wrapped_msgs);
 
     // check that the message can be found at the outgoing gateway
     let executable_msgs =
-        test_utils::executable_messages_from_axelarnet_gateway(&mut protocol.app, &axelarnet.gateway, &msg_ids);
+        test_utils::executable_messages_from_axelarnet_gateway(&mut protocol.app, &axelarnet.gateway, &wrapped_msg_ids);
     assert_eq!(executable_msgs.len(), 1);
     if let axelarnet_gateway::ExecutableMessage::Approved(approved_msg) = executable_msgs.first().unwrap() {
         assert_eq!(*approved_msg, wrapped_msg)
@@ -446,7 +444,7 @@ fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
     test_utils::route_axelarnet_gateway_messages(
         &mut protocol,
         &axelarnet.gateway,
-        msgs.clone(),
+        wrapped_msgs.clone(),
     );
 
     let its_hub_msg_ids = vec![CrossChainId::new(axelarnet.chain_name.clone(), its_hub_msg_id).unwrap()];

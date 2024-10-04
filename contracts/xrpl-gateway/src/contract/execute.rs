@@ -88,12 +88,12 @@ pub(crate) fn route_outgoing_messages(
 pub(crate) fn deploy_xrp_to_sidechain(
     storage: &mut dyn Storage,
     block_height: u64,
-    self_address: &Addr,
     router: &Router,
     its_hub: &Addr,
     axelar_chain_name: &ChainName,
     xrpl_chain_name: &ChainName,
     sidechain_name: &ChainName,
+    xrpl_multisig_address: &String,
     params: HexBinary,
 ) -> Result<Response, Error> {
     let token_id = XRPLTokenOrXRP::XRP.token_id();
@@ -110,7 +110,7 @@ pub(crate) fn deploy_xrp_to_sidechain(
 
     let msg = Message {
         cc_id: generate_cross_chain_id(storage, block_height, xrpl_chain_name.clone())?,
-        source_address: Address::from_str(&self_address.to_string()).unwrap(),
+        source_address: Address::from_str(&xrpl_multisig_address).unwrap(),
         destination_address: Address::from_str(its_hub.as_str()).unwrap(),
         destination_chain: axelar_chain_name.clone(),
         payload_hash: Keccak256::digest(payload.as_slice()).into(),
@@ -119,14 +119,50 @@ pub(crate) fn deploy_xrp_to_sidechain(
     Ok(Response::new().add_messages(router.route(vec![msg.clone()])).add_event(GatewayEvent::RoutingIncoming { msg }.into()))
 }
 
+#[test]
+fn send_to_hub() {
+    let token_id = XRPLTokenOrXRP::XRP.token_id();
+    let original = ItsHubMessage::SendToHub {
+        destination_chain: ChainName::from_str("xrpl-evm-sidechain").unwrap(),
+        message: ItsMessage::DeployTokenManager {
+            token_id,
+            token_manager_type: TokenManagerType::LockUnlock,
+            params: HexBinary::from_hex("0000000000000000000000000000000000000000000000000000000000000040000000000000000000000000a7baa2fe1df377147aaf49858b399f8c2564e8a400000000000000000000000000000000000000000000000000000000000000140A90c0Af1B07f6AC34f3520348Dbfae73BDa358E000000000000000000000000").unwrap(),
+        },
+    };
+
+    let encoded = original.clone().abi_encode();
+    println!("encoded: {:?}", encoded);
+    let decoded = ItsHubMessage::abi_decode(&encoded).unwrap();
+    assert_eq!(original, decoded);
+}
+
+#[test]
+fn receive_from_hub() {
+    let token_id = XRPLTokenOrXRP::XRP.token_id();
+    let original = ItsHubMessage::ReceiveFromHub {
+        source_chain: ChainName::from_str("xrpl").unwrap().into(),
+        message: ItsMessage::DeployTokenManager {
+            token_id,
+            token_manager_type: TokenManagerType::LockUnlock,
+            params: HexBinary::from_hex("0000000000000000000000000000000000000000000000000000000000000040000000000000000000000000a7baa2fe1df377147aaf49858b399f8c2564e8a400000000000000000000000000000000000000000000000000000000000000140A90c0Af1B07f6AC34f3520348Dbfae73BDa358E000000000000000000000000").unwrap(),
+        },
+    };
+
+    let encoded = original.clone().abi_encode();
+    println!("encoded: {:?}", encoded);
+    let decoded = ItsHubMessage::abi_decode(&encoded).unwrap();
+    assert_eq!(original, decoded);
+}
+
 pub(crate) fn deploy_interchain_token(
     storage: &mut dyn Storage,
     block_height: u64,
-    self_address: &Addr,
     router: &Router,
     its_hub: &Addr,
     axelar_chain_name: &ChainName,
     xrpl_chain_name: &ChainName,
+    xrpl_multisig_address: &String,
     params: InterchainTokenDeployment,
 ) -> Result<Response, Error> {
     let token_id = params.xrpl_token.token_id();
@@ -145,7 +181,7 @@ pub(crate) fn deploy_interchain_token(
 
     let msg = Message {
         cc_id: generate_cross_chain_id(storage, block_height, xrpl_chain_name.clone())?,
-        source_address: Address::from_str(&self_address.to_string()).unwrap(),
+        source_address: Address::from_str(&xrpl_multisig_address).unwrap(),
         destination_address: Address::from_str(its_hub.as_str()).unwrap(),
         destination_chain: axelar_chain_name.clone(),
         payload_hash: Keccak256::digest(payload.as_slice()).into(),
