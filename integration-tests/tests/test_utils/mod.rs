@@ -35,7 +35,7 @@ use multisig::{
 };
 use multisig_prover::msg::VerifierSetResponse;
 use rewards::PoolId;
-use router_api::{Address, ChainName, CrossChainId, GatewayDirection, Message};
+use router_api::{Address, ChainName, ChainNameRaw, CrossChainId, GatewayDirection, Message};
 use service_registry::msg::ExecuteMsg;
 use tofn::ecdsa::KeyPair;
 
@@ -492,7 +492,6 @@ pub fn route_axelarnet_gateway_messages(
     assert!(response.is_ok());
 }
 
-
 pub fn set_its_address(
     protocol: &mut Protocol,
     its_hub: &InterchainTokenServiceContract,
@@ -502,8 +501,8 @@ pub fn set_its_address(
     let response = its_hub.execute(
         &mut protocol.app,
         protocol.governance_address.clone(),
-        &interchain_token_service::msg::ExecuteMsg::SetItsAddress {
-            chain: its_chain,
+        &interchain_token_service::msg::ExecuteMsg::RegisterItsContract {
+            chain: its_chain.into(),
             address: its_address,
         },
     );
@@ -988,7 +987,6 @@ pub fn setup_chain(
 ) -> Chain {
     let voting_verifier = VotingVerifierContract::instantiate_contract(
         protocol,
-        "doesn't matter".try_into().unwrap(),
         Threshold::try_from((3, 4)).unwrap().try_into().unwrap(),
         chain_name.clone(),
     );
@@ -1516,16 +1514,16 @@ pub fn setup_xrpl_source_test_case() -> XRPLSourceTestCase {
     register_verifiers(&mut protocol, &verifiers, min_verifier_bond);
 
     let axelarnet = setup_axelarnet(&mut protocol, chains.get(1).unwrap().clone());
-    let its_addresses: HashMap<ChainName, Address> = vec![]
-    .into_iter()
-    .collect::<HashMap<_, _>>();
+    let its_contracts: HashMap<ChainNameRaw, Address> = vec![]
+        .into_iter()
+        .collect::<HashMap<_, _>>();
 
     let its_hub = InterchainTokenServiceContract::instantiate_contract(
         &mut protocol.app,
         axelarnet.gateway.contract_addr.clone(),
         protocol.governance_address.clone(),
         protocol.router_admin_address.clone(), // TODO
-        its_addresses,
+        its_contracts,
     );
 
     let xrpl = setup_xrpl(&mut protocol, &verifiers, its_hub.contract_addr.clone(), axelarnet.chain_name.clone());
@@ -1575,16 +1573,16 @@ pub fn setup_xrpl_destination_test_case() -> XRPLDestinationTestCase {
     register_verifiers(&mut protocol, &verifiers, min_verifier_bond);
 
     let axelarnet = setup_axelarnet(&mut protocol, chains.get(1).unwrap().clone());
-    let its_addresses: HashMap<ChainName, Address> = vec![]
-    .into_iter()
-    .collect::<HashMap<_, _>>();
+    let its_contracts: HashMap<ChainNameRaw, Address> = vec![]
+        .into_iter()
+        .collect::<HashMap<_, _>>();
 
     let its_hub = InterchainTokenServiceContract::instantiate_contract(
         &mut protocol.app,
         axelarnet.gateway.contract_addr.clone(),
         protocol.governance_address.clone(),
         protocol.router_admin_address.clone(), // TODO
-        its_addresses,
+        its_contracts,
     );
 
     let source_chain = setup_chain(&mut protocol, chains.first().unwrap().clone(), &verifiers);

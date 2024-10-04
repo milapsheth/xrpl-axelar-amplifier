@@ -12,7 +12,7 @@ use sha3::{Digest, Keccak256};
 use xrpl_types::types::{XRPLPaymentAmount, XRPLTokenOrXRP};
 use xrpl_voting_verifier::msg::MessageStatus;
 use xrpl_types::msg::{CrossChainMessage, XRPLMessage, XRPLMessageWithPayload};
-use interchain_token_service::{ItsHubMessage, ItsMessage, TokenId, TokenManagerType};
+use interchain_token_service as its;
 
 use crate::contract::Error;
 use crate::events::GatewayEvent;
@@ -97,11 +97,11 @@ pub(crate) fn deploy_xrp_to_sidechain(
     params: HexBinary,
 ) -> Result<Response, Error> {
     let token_id = XRPLTokenOrXRP::XRP.token_id();
-    let its_msg = ItsHubMessage::SendToHub {
-        destination_chain: sidechain_name.clone(),
-        message: ItsMessage::DeployTokenManager {
+    let its_msg = its::HubMessage::SendToHub {
+        destination_chain: sidechain_name.clone().into(),
+        message: its::Message::DeployTokenManager {
             token_id,
-            token_manager_type: TokenManagerType::LockUnlock,
+            token_manager_type: its::TokenManagerType::LockUnlock,
             params,
         },
     };
@@ -122,36 +122,36 @@ pub(crate) fn deploy_xrp_to_sidechain(
 #[test]
 fn send_to_hub() {
     let token_id = XRPLTokenOrXRP::XRP.token_id();
-    let original = ItsHubMessage::SendToHub {
-        destination_chain: ChainName::from_str("xrpl-evm-sidechain").unwrap(),
-        message: ItsMessage::DeployTokenManager {
+    let original = its::HubMessage::SendToHub {
+        destination_chain: ChainName::from_str("xrpl-evm-sidechain").unwrap().into(),
+        message: its::Message::DeployTokenManager {
             token_id,
-            token_manager_type: TokenManagerType::LockUnlock,
+            token_manager_type: its::TokenManagerType::LockUnlock,
             params: HexBinary::from_hex("0000000000000000000000000000000000000000000000000000000000000040000000000000000000000000a7baa2fe1df377147aaf49858b399f8c2564e8a400000000000000000000000000000000000000000000000000000000000000140A90c0Af1B07f6AC34f3520348Dbfae73BDa358E000000000000000000000000").unwrap(),
         },
     };
 
     let encoded = original.clone().abi_encode();
     println!("encoded: {:?}", encoded);
-    let decoded = ItsHubMessage::abi_decode(&encoded).unwrap();
+    let decoded = its::HubMessage::abi_decode(&encoded).unwrap();
     assert_eq!(original, decoded);
 }
 
 #[test]
 fn receive_from_hub() {
     let token_id = XRPLTokenOrXRP::XRP.token_id();
-    let original = ItsHubMessage::ReceiveFromHub {
+    let original = its::HubMessage::ReceiveFromHub {
         source_chain: ChainName::from_str("xrpl").unwrap().into(),
-        message: ItsMessage::DeployTokenManager {
+        message: its::Message::DeployTokenManager {
             token_id,
-            token_manager_type: TokenManagerType::LockUnlock,
+            token_manager_type: its::TokenManagerType::LockUnlock,
             params: HexBinary::from_hex("0000000000000000000000000000000000000000000000000000000000000040000000000000000000000000a7baa2fe1df377147aaf49858b399f8c2564e8a400000000000000000000000000000000000000000000000000000000000000140A90c0Af1B07f6AC34f3520348Dbfae73BDa358E000000000000000000000000").unwrap(),
         },
     };
 
     let encoded = original.clone().abi_encode();
     println!("encoded: {:?}", encoded);
-    let decoded = ItsHubMessage::abi_decode(&encoded).unwrap();
+    let decoded = its::HubMessage::abi_decode(&encoded).unwrap();
     assert_eq!(original, decoded);
 }
 
@@ -166,9 +166,9 @@ pub(crate) fn deploy_interchain_token(
     params: InterchainTokenDeployment,
 ) -> Result<Response, Error> {
     let token_id = params.xrpl_token.token_id();
-    let its_msg = ItsHubMessage::SendToHub {
-        destination_chain: params.destination_chain,
-        message: ItsMessage::DeployInterchainToken {
+    let its_msg = its::HubMessage::SendToHub {
+        destination_chain: params.destination_chain.into(),
+        message: its::Message::DeployInterchainToken {
             token_id,
             name: params.name,
             symbol: params.symbol,
@@ -355,12 +355,12 @@ fn to_its_message(
     match msg.message.clone() {
         XRPLMessage::ProverMessage(_tx_hash) => todo!(),
         XRPLMessage::UserMessage(user_message) => {
-            let token_id: TokenId = match user_message.amount.clone() { // TODO: CASE-SENSITIVE?
+            let token_id: its::TokenId = match user_message.amount.clone() { // TODO: CASE-SENSITIVE?
                 XRPLPaymentAmount::Drops(_) => XRPLTokenOrXRP::XRP.token_id(),
                 XRPLPaymentAmount::Token(token, _) => state::XRPL_CURRENCY_TO_TOKEN_ID.load(store, token.currency.to_bytes()).unwrap(),
             };
 
-            let interchain_transfer = ItsMessage::InterchainTransfer {
+            let interchain_transfer = its::Message::InterchainTransfer {
                 token_id,
                 source_address: HexBinary::from(&user_message.source_address.to_bytes()),
                 destination_address: user_message.destination_address,
@@ -368,8 +368,8 @@ fn to_its_message(
                 data: msg.payload,
             };
 
-            let its_msg = ItsHubMessage::SendToHub {
-                destination_chain: user_message.destination_chain,
+            let its_msg = its::HubMessage::SendToHub {
+                destination_chain: user_message.destination_chain.into(),
                 message: interchain_transfer,
             };
 

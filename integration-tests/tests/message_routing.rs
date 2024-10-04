@@ -6,7 +6,7 @@ use cosmwasm_std::{Addr, HexBinary, Uint128, Uint256};
 use multisig::key::KeyType;
 use integration_tests::contract::Contract;
 use xrpl_types::{msg::{CrossChainMessage, UserMessage, XRPLMessage, XRPLMessageWithPayload}, types::{XRPLAccountId, XRPLPaymentAmount, XRPLTokenOrXRP}};
-use interchain_token_service::{ItsHubMessage, ItsMessage};
+use interchain_token_service as its;
 use ethers_core::utils::keccak256;
 
 use crate::test_utils::AXL_DENOMINATION;
@@ -215,7 +215,7 @@ fn payment_from_xrpl_can_be_verified_and_routed_and_proven() {
         payload: payload.clone(),
     };
 
-    let interchain_transfer_msg = ItsMessage::InterchainTransfer {
+    let interchain_transfer_msg = its::Message::InterchainTransfer {
         token_id: XRPLTokenOrXRP::XRP.token_id(),
         source_address: HexBinary::from(source_address.to_bytes()),
         destination_address,
@@ -224,9 +224,9 @@ fn payment_from_xrpl_can_be_verified_and_routed_and_proven() {
         data: payload,
     };
 
-    let wrapped_payload = ItsHubMessage::SendToHub {
+    let wrapped_payload = its::HubMessage::SendToHub {
         message: interchain_transfer_msg.clone(),
-        destination_chain: destination_chain_name.clone(),
+        destination_chain: destination_chain_name.clone().into(),
     }.abi_encode();
 
     let wrapped_msg = Message {
@@ -374,7 +374,7 @@ fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
     let amount = Uint256::from(1000000000000000000u64);
     let data = HexBinary::from(vec![0]); // TODO: should be empty
 
-    let interchain_transfer_msg = ItsMessage::InterchainTransfer {
+    let interchain_transfer_msg = its::Message::InterchainTransfer {
         token_id: XRPLTokenOrXRP::XRP.token_id(),
         source_address: HexBinary::from(source_address.as_bytes()),
         destination_address: HexBinary::from(destination_address.as_bytes()),
@@ -382,9 +382,9 @@ fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
         data,
     };
 
-    let wrapped_payload = ItsHubMessage::SendToHub {
+    let wrapped_payload = its::HubMessage::SendToHub {
         message: interchain_transfer_msg.clone(),
-        destination_chain,
+        destination_chain: destination_chain.into(),
     }.abi_encode();
 
     let wrapped_msg = Message {
@@ -463,7 +463,7 @@ fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
         &xrpl.multisig_prover,
         routable_msgs.first().unwrap().clone(),
         &verifiers,
-        ItsHubMessage::ReceiveFromHub {
+        its::HubMessage::ReceiveFromHub {
             source_chain: source_chain.chain_name.clone().into(),
             message: interchain_transfer_msg,
         }.abi_encode(),

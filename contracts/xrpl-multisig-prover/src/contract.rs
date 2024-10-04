@@ -2,7 +2,7 @@ use std::{collections::HashSet, str::FromStr};
 
 use axelar_wasm_std::{permission_control, FnExt};
 use axelar_wasm_std::{MajorityThreshold, VerificationStatus};
-use interchain_token_service::ItsHubMessage;
+use interchain_token_service as its;
 use router_api::{ChainName, CrossChainId};
 use cosmwasm_std::{
     entry_point, to_json_binary, wasm_execute, Addr, Binary, Deps, DepsMut, Empty, Env, Fraction, HexBinary, MessageInfo, Reply, Response, StdResult, Storage, SubMsg, Uint128, Uint256, Uint64
@@ -261,19 +261,19 @@ fn construct_payment_proof(
         return Err(ContractError::InvalidPayload);
     }
 
-    let its_hub_message = ItsHubMessage::abi_decode(payload.as_slice()).unwrap();
+    let its_hub_message = its::HubMessage::abi_decode(payload.as_slice()).unwrap();
 
     let its_transfer = match its_hub_message {
-        ItsHubMessage::SendToHub { .. } => {
+        its::HubMessage::SendToHub { .. } => {
             Err(ContractError::InvalidPayload)
         },
-        ItsHubMessage::ReceiveFromHub { source_chain, message } => {
+        its::HubMessage::ReceiveFromHub { source_chain, message } => {
             match message {
-                interchain_token_service::ItsMessage::InterchainTransfer { token_id, source_address, destination_address, amount, data } => {
+                interchain_token_service::Message::InterchainTransfer { token_id, source_address, destination_address, amount, data } => {
                     Ok((token_id, source_address, destination_address, amount, data))
                 },
-                interchain_token_service::ItsMessage::DeployInterchainToken { .. } |
-                interchain_token_service::ItsMessage::DeployTokenManager { .. } => {
+                interchain_token_service::Message::DeployInterchainToken { .. } |
+                interchain_token_service::Message::DeployTokenManager { .. } => {
                     Err(ContractError::InvalidPayload)
                 },
             }

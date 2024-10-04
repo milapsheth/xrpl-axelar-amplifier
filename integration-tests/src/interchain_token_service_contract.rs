@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use cosmwasm_std::Addr;
 use cw_multi_test::{App, ContractWrapper, Executor};
-use router_api::{Address, ChainName};
+use router_api::{Address, ChainNameRaw};
 
 use crate::contract::Contract;
 
@@ -17,7 +17,7 @@ impl InterchainTokenServiceContract {
         axelarnet_gateway: Addr,
         governance: Addr,
         admin: Addr,
-        its_addresses: HashMap<ChainName, Address>,
+        its_contracts: HashMap<ChainNameRaw, Address>,
     ) -> Self {
         let code = ContractWrapper::new(
             interchain_token_service::contract::execute,
@@ -34,7 +34,7 @@ impl InterchainTokenServiceContract {
                     axelarnet_gateway_address: axelarnet_gateway.to_string(),
                     governance_address: governance.to_string(),
                     admin_address: admin.to_string(),
-                    its_addresses,
+                    its_contracts,
                 },
                 &[],
                 "interchain_token_service",
