@@ -95,7 +95,7 @@ mod test {
     use cosmwasm_std::HexBinary;
     use xrpl_http_client::{Amount, Memo};
     use xrpl_types::{msg::UserMessage, types::{XRPLAccountId, XRPLPaymentAmount}};
-    use router_api::{Address, ChainName};
+    use router_api::ChainName;
 
     // TODO: add adapted EVM tests
 
