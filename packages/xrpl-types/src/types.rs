@@ -155,7 +155,7 @@ impl XRPLTokenOrXRP {
             XRPLTokenOrXRP::Token(token) => {
                 (token.issuer.0, token.currency.clone().to_bytes().to_vec())
             },
-            XRPLTokenOrXRP::XRP => ([0u8; 20], "XRP".as_bytes().to_vec()),
+            XRPLTokenOrXRP::XRP => ([1u8; 20], "XRP".as_bytes().to_vec()), // TODO: switch back to [0; 20]
         };
         let prefix = Keccak256::digest(ITS_INTERCHAIN_TOKEN_ID);
         let token_id = Keccak256::digest(vec![prefix.as_slice(), &deployer, salt.as_slice()].concat());
@@ -320,6 +320,12 @@ impl XRPLAccountId {
     pub fn from_bytes(bytes: [u8; 20]) -> Self {
         Self(bytes)
     }
+}
+
+#[test]
+fn test_xrpl_account_id_from_string() {
+    let xrpl_account = "rNM8ue6DZpneFC4gBEJMSEdbwNEBZjs3Dy";
+    println!("XRPLAccountId from string: {:?}", XRPLAccountId::from_str(xrpl_account).unwrap().to_bytes());
 }
 
 impl Display for XRPLAccountId {
