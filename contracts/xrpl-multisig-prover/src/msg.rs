@@ -30,8 +30,8 @@ pub struct InstantiateMsg {
 #[cw_serde]
 #[derive(QueryResponses)]
 pub enum QueryMsg {
-    #[returns(GetProofResponse)]
-    GetProof { multisig_session_id: Uint64 },
+    #[returns(ProofResponse)]
+    Proof { multisig_session_id: Uint64 },
 
     #[returns(bool)]
     VerifySignature {
@@ -43,15 +43,15 @@ pub enum QueryMsg {
     },
 
     #[returns(multisig::verifier_set::VerifierSet)]
-    GetVerifierSet,
+    VerifierSet,
 
     #[returns(Option<u64>)]
-    GetMultisigSessionId { message_id: CrossChainId },
+    MultisigSessionId { message_id: CrossChainId },
 }
 
 #[cw_serde]
 #[serde(tag = "status")]
-pub enum GetProofResponse {
+pub enum ProofResponse {
     Completed {
         unsigned_tx_hash: TxHash,
         tx_blob: HexBinary,

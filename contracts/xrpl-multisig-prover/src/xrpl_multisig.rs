@@ -44,7 +44,7 @@ fn issue_tx(
 pub fn issue_payment(
     storage: &mut dyn Storage,
     config: &Config,
-    destination: String,
+    destination: XRPLAccountId,
     amount: &XRPLPaymentAmount,
     message_id: &CrossChainId,
 ) -> Result<TxHash, ContractError> {
@@ -55,7 +55,8 @@ pub fn issue_payment(
         fee: config.xrpl_fee,
         sequence: XRPLSequence::Ticket(ticket_number),
         amount: amount.clone(),
-        destination: XRPLAccountId::from_str(destination.as_str())?,
+        // destination: XRPLAccountId::from_str(destination.as_str())?,
+        destination,
     };
 
     issue_tx(

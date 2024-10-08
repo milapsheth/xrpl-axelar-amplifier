@@ -8,7 +8,7 @@ use xrpl_types::error::XRPLError;
 use crate::state::{AVAILABLE_TICKETS, MESSAGE_ID_TO_MULTISIG_SESSION_ID, MESSAGE_ID_TO_TICKET};
 use crate::{
     error::ContractError,
-    msg::GetProofResponse,
+    msg::ProofResponse,
     querier::Querier,
     state::{CURRENT_VERIFIER_SET, MULTISIG_SESSION_ID_TO_TX_HASH, TRANSACTION_INFO},
     xrpl_multisig::{self, HASH_PREFIX_UNSIGNED_TX_MULTI_SIGNING},
@@ -54,7 +54,7 @@ pub fn get_proof(
     storage: &dyn Storage,
     querier: Querier,
     multisig_session_id: &Uint64,
-) -> StdResult<GetProofResponse> {
+) -> StdResult<ProofResponse> {
     let unsigned_tx_hash =
         MULTISIG_SESSION_ID_TO_TX_HASH.load(storage, multisig_session_id.u64())?;
 
@@ -63,7 +63,7 @@ pub fn get_proof(
     let multisig_session = querier.get_multisig_session(multisig_session_id)?;
 
     let response = match multisig_session.state {
-        MultisigState::Pending => GetProofResponse::Pending { unsigned_tx_hash },
+        MultisigState::Pending => ProofResponse::Pending { unsigned_tx_hash },
         MultisigState::Completed { .. } => {
             let xrpl_signers: Vec<XRPLSigner> = multisig_session
                 .verifier_set
@@ -74,7 +74,7 @@ pub fn get_proof(
                 .collect::<Result<Vec<_>, XRPLError>>()?;
             let signed_tx = XRPLSignedTransaction::new(tx_info.unsigned_contents, xrpl_signers);
             let tx_blob: HexBinary = HexBinary::from(signed_tx.xrpl_serialize()?);
-            GetProofResponse::Completed {
+            ProofResponse::Completed {
                 unsigned_tx_hash,
                 tx_blob,
             }

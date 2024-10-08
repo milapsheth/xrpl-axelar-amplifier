@@ -1,9 +1,9 @@
-use std::{collections::HashSet, str::FromStr};
+use std::collections::HashSet;
 
 use axelar_wasm_std::{permission_control, FnExt};
 use axelar_wasm_std::{MajorityThreshold, VerificationStatus};
 use interchain_token_service as its;
-use router_api::{ChainName, CrossChainId};
+use router_api::CrossChainId;
 use cosmwasm_std::{
     entry_point, to_json_binary, wasm_execute, Addr, Binary, Deps, DepsMut, Empty, Env, Fraction, HexBinary, MessageInfo, Reply, Response, StdResult, Storage, SubMsg, Uint128, Uint256, Uint64
 };
@@ -248,7 +248,8 @@ fn construct_payment_proof(
     {
         let multisig_session = querier.get_multisig_session(&Uint64::from(multisig_session_id))?;
         if multisig_session.state == MultisigState::Pending
-            && multisig_session.expires_at <= block_height
+            // TODO: AND MULTISIG SESSION HAS EXPIRED
+            // && multisig_session.expires_at <= block_height
         {
             return Err(ContractError::PaymentAlreadyHasActiveSigningSession(
                 multisig_session_id,
@@ -294,10 +295,11 @@ fn construct_payment_proof(
         XRPLPaymentAmount::Token(token_info.xrpl_token, canonicalize_coin_amount(Uint128::try_from(amount).unwrap(), token_info.decimals)?)
     };
 
+    let destination_bytes: [u8; 20] = destination_address.as_slice().try_into().map_err(|_| ContractError::InvalidAddress)?;
     let tx_hash = xrpl_multisig::issue_payment(
         storage,
         config,
-        String::from_utf8(hex::decode(destination_address.to_string())?)?, // TODO
+        XRPLAccountId::from_bytes(destination_bytes), // TODO
         &xrpl_payment_amount,
         &message_id,
     )?;
@@ -570,7 +572,7 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     let config = CONFIG.load(deps.storage)?;
     let querier = Querier::new(deps.querier, config.clone());
     match msg {
-        QueryMsg::GetProof {
+        QueryMsg::Proof {
             multisig_session_id,
         } => to_json_binary(&query::get_proof(
             deps.storage,
@@ -590,8 +592,8 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
             &multisig::key::Signature::try_from((multisig::key::KeyType::Ecdsa, signature))
                 .map_err(|_| ContractError::InvalidSignature)?,
         )?),
-        QueryMsg::GetVerifierSet {} => to_json_binary(&query::get_verifier_set(deps.storage)?),
-        QueryMsg::GetMultisigSessionId { message_id } => {
+        QueryMsg::VerifierSet {} => to_json_binary(&query::get_verifier_set(deps.storage)?),
+        QueryMsg::MultisigSessionId { message_id } => {
             to_json_binary(&query::get_multisig_session_id(deps.storage, &message_id)?)
         } // TODO: rename
     }
