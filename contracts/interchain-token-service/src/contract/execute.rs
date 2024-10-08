@@ -41,8 +41,8 @@ pub fn execute_message(
             destination_chain,
             message,
         } => {
-            let destination_address = load_its_contract(deps.storage, &destination_chain)
-                .change_context_lazy(|| Error::UnknownChain(destination_chain.clone()))?;
+            let destination_address = load_its_contract(deps.storage, &destination_chain.clone().into())
+                .change_context_lazy(|| Error::UnknownChain(destination_chain.clone().into()))?;
 
             let destination_payload = HubMessage::ReceiveFromHub {
                 source_chain: cc_id.source_chain.clone(),
@@ -53,14 +53,14 @@ pub fn execute_message(
             Ok(send_to_destination(
                 deps.storage,
                 deps.querier,
-                destination_chain.clone(),
+                destination_chain.clone().into(),
                 destination_address,
                 destination_payload,
             )?
             .add_event(
                 Event::MessageReceived {
                     cc_id,
-                    destination_chain,
+                    destination_chain: destination_chain.into(),
                     message,
                 }
                 .into(),

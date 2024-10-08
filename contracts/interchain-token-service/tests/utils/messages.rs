@@ -1,6 +1,6 @@
 use cosmwasm_std::{HexBinary, Uint256};
 use interchain_token_service::{HubMessage, Message, TokenId};
-use router_api::{Address, ChainNameRaw, CrossChainId};
+use router_api::{Address, ChainName, ChainNameRaw, CrossChainId};
 
 pub fn dummy_message() -> Message {
     Message::InterchainTransfer {
@@ -17,7 +17,7 @@ pub struct TestMessage {
     pub router_message: router_api::Message,
     pub source_its_chain: ChainNameRaw,
     pub source_its_contract: Address,
-    pub destination_its_chain: ChainNameRaw,
+    pub destination_its_chain: ChainName,
     pub destination_its_contract: Address,
 }
 
@@ -25,7 +25,7 @@ impl TestMessage {
     pub fn dummy() -> Self {
         let source_its_chain: ChainNameRaw = "source-its-chain".parse().unwrap();
         let source_its_contract: Address = "source-its-contract".parse().unwrap();
-        let destination_its_chain: ChainNameRaw = "dest-its-chain".parse().unwrap();
+        let destination_its_chain: ChainName = "dest-its-chain".parse().unwrap();
         let destination_its_contract: Address = "dest-its-contract".parse().unwrap();
 
         let hub_message = HubMessage::SendToHub {
