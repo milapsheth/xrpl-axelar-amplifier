@@ -36,7 +36,7 @@ pub enum ExecuteMsg {
     // TODO
     // #[permission(Specific(Admin))]
     #[permission(Any)]
-    DeployXRPToSidechain { sidechain_name: ChainName, params: HexBinary },
+    DeployXrpToSidechain { sidechain_name: ChainName, params: HexBinary },
 
     // TODO
     // #[permission(Specific(Admin))]

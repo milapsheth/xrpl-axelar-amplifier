@@ -120,14 +120,14 @@ pub(crate) fn deploy_xrp_to_sidechain(
 }
 
 #[test]
-fn send_to_hub() {
+fn send_deploy_token_manager_to_hub() {
     let token_id = XRPLTokenOrXRP::XRP.token_id();
     let original = its::HubMessage::SendToHub {
         destination_chain: ChainName::from_str("xrpl-evm-sidechain").unwrap().into(),
         message: its::Message::DeployTokenManager {
             token_id,
             token_manager_type: its::TokenManagerType::LockUnlock,
-            params: HexBinary::from_hex("0000000000000000000000000000000000000000000000000000000000000040000000000000000000000000a7baa2fe1df377147aaf49858b399f8c2564e8a400000000000000000000000000000000000000000000000000000000000000140A90c0Af1B07f6AC34f3520348Dbfae73BDa358E000000000000000000000000").unwrap(),
+            params: HexBinary::from_hex("0000000000000000000000000000000000000000000000000000000000000040000000000000000000000000d4949664cd82660aae99bedc034a0dea8a0bd51700000000000000000000000000000000000000000000000000000000000000140A90c0Af1B07f6AC34f3520348Dbfae73BDa358E000000000000000000000000").unwrap(),
         },
     };
 
@@ -138,7 +138,7 @@ fn send_to_hub() {
 }
 
 #[test]
-fn receive_from_hub() {
+fn receive_deploy_token_manager_from_hub() {
     let token_id = XRPLTokenOrXRP::XRP.token_id();
     let original = its::HubMessage::ReceiveFromHub {
         source_chain: ChainName::from_str("xrpl").unwrap().into(),
@@ -360,6 +360,7 @@ fn to_its_message(
                 XRPLPaymentAmount::Token(token, _) => state::XRPL_CURRENCY_TO_TOKEN_ID.load(store, token.currency.to_bytes()).unwrap(),
             };
 
+            // TODO: check that msg.payload matches user_message.payload_hash
             let interchain_transfer = its::Message::InterchainTransfer {
                 token_id,
                 source_address: HexBinary::from(&user_message.source_address.to_bytes()),
@@ -384,4 +385,48 @@ fn to_its_message(
             }
         },
     }
+}
+
+#[test]
+fn send_interchain_token_transfer_to_hub() {
+    let interchain_transfer = its::Message::InterchainTransfer {
+        token_id: XRPLTokenOrXRP::XRP.token_id(),
+        source_address: HexBinary::from(xrpl_types::types::XRPLAccountId::from_str("rNM8ue6DZpneFC4gBEJMSEdbwNEBZjs3Dy").unwrap().to_bytes()),
+        //destination_address: HexBinary::from_hex("dBfA2ae8aF2FA445B71F1C504d4BDCf8c1Fd5bE9").unwrap(),
+        destination_address: HexBinary::from_hex("d84f0525dC35448150Df0B83D5d0d574fa59785E").unwrap(),
+        //amount: XRPLPaymentAmount::Drops(1420000).into(),
+        amount: XRPLPaymentAmount::Drops(1000000).into(),
+        // data: HexBinary::from(vec![]),
+        data: HexBinary::from_hex("0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000001a4772656574696e67732066726f6d20746865205852504c203a29000000000000").unwrap(),
+    };
+
+    let its_msg = its::HubMessage::SendToHub {
+        destination_chain: ChainName::from_str("xrpl-evm-sidechain").unwrap().into(),
+        message: interchain_transfer,
+    };
+
+    let payload = its_msg.abi_encode();
+    println!("payload: {:?}", payload);
+}
+
+#[test]
+fn receive_interchain_token_transfer_from_hub() {
+    let original = its::HubMessage::ReceiveFromHub {
+        source_chain: ChainName::from_str("xrpl").unwrap().into(),
+        message: its::Message::InterchainTransfer {
+            token_id: XRPLTokenOrXRP::XRP.token_id(),
+            source_address: HexBinary::from(vec![146, 136, 70, 186, 245, 155, 212, 140, 40, 177, 49, 133, 84, 114, 208, 76, 147, 187, 208, 183]),
+            //destination_address: HexBinary::from_hex("dBfA2ae8aF2FA445B71F1C504d4BDCf8c1Fd5bE9").unwrap(),
+            destination_address: HexBinary::from_hex("d84f0525dC35448150Df0B83D5d0d574fa59785E").unwrap(),
+            // amount: Uint256::from(1420000000000000000u128),
+            amount: Uint256::from(1000000000000000000u128).into(),
+            // data: HexBinary::from(vec![]),
+            data: HexBinary::from_hex("0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000001a4772656574696e67732066726f6d20746865205852504c203a29000000000000").unwrap(),
+        },
+    };
+
+    let encoded = original.clone().abi_encode();
+    println!("encoded: {:?}", encoded);
+    let decoded = its::HubMessage::abi_decode(&encoded).unwrap();
+    assert_eq!(original, decoded);
 }

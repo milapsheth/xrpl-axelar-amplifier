@@ -138,7 +138,7 @@ mod internal {
         };
 
         match msg.ensure_permissions(deps.storage, &info.sender).map_err(|_| Error::InvalidPermissions)? {
-            ExecuteMsg::DeployXRPToSidechain {
+            ExecuteMsg::DeployXrpToSidechain {
                 sidechain_name,
                 params,
             } => contract::execute::deploy_xrp_to_sidechain(
@@ -163,6 +163,8 @@ mod internal {
                 params,
             ),
             ExecuteMsg::VerifyMessages(msgs) => contract::execute::verify_messages(&verifier, msgs),
+            // Should be called RouteOutgoingMessage.
+            // Called RouteMessages for compatibility with the router.
             ExecuteMsg::RouteMessages(msgs) => {
                 if info.sender != router.address {
                     return Err(Error::RouterOnly)?;
