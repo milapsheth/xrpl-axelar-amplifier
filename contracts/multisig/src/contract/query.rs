@@ -14,8 +14,6 @@ pub fn multisig(deps: Deps, session_id: Uint64) -> StdResult<Multisig> {
 
     Ok(Multisig {
         state: session.state,
-        expires_at: session.expires_at, // TODO: check if redundant
-        quorum: verifier_set.threshold, // TODO: check if redundant
         verifier_set,
         signatures,
     })

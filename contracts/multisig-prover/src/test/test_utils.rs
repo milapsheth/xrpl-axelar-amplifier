@@ -109,8 +109,6 @@ fn mock_multisig(operators: Vec<TestOperator>) -> Multisig {
         },
         verifier_set,
         signatures,
-        expires_at: 12345,
-        quorum,
     }
 }
 

@@ -14,8 +14,6 @@ pub struct Multisig {
     pub state: MultisigState,
     pub verifier_set: VerifierSet,
     pub signatures: HashMap<String, Signature>,
-    pub expires_at: u64,
-    pub quorum: Uint128,
 }
 
 impl Multisig {
@@ -101,8 +99,6 @@ mod test {
             state: MultisigState::Completed { completed_at: 1 },
             verifier_set,
             signatures: sigs.into_iter().collect(),
-            expires_at: 1,
-            quorum: threshold,
         };
 
         assert_eq!(multisig.optimize_signatures(), expected_optimized_signers);
