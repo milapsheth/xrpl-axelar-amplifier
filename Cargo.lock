@@ -9969,7 +9969,7 @@ dependencies = [
 
 [[package]]
 name = "xrpl-gateway"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "axelar-wasm-std",
  "axelar-wasm-std-derive",
@@ -9997,7 +9997,7 @@ dependencies = [
 
 [[package]]
 name = "xrpl-multisig-prover"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "ascii",

@@ -145,7 +145,7 @@ fn xrpl_ticket_create_can_be_proven() {
     );
     assert!(matches!(
         proof,
-        xrpl_multisig_prover::msg::GetProofResponse::Completed { .. }
+        xrpl_multisig_prover::msg::ProofResponse::Completed { .. }
     ));
     println!("TicketCreate proof: {:?}", proof);
 
@@ -365,10 +365,7 @@ fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
         .try_into()
         .unwrap();
 
-    let destination_address: Address = "raNVNWvhUQzFkDDTdEw3roXRJfMJFVJuQo"
-        .to_string()
-        .try_into()
-        .unwrap();
+    let destination_address: XRPLAccountId = XRPLAccountId::from_str("raNVNWvhUQzFkDDTdEw3roXRJfMJFVJuQo").unwrap();
 
     let destination_chain = xrpl.chain_name.clone();
     let amount = Uint256::from(1000000000000000000u64);
@@ -377,7 +374,7 @@ fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
     let interchain_transfer_msg = its::Message::InterchainTransfer {
         token_id: XRPLTokenOrXRP::XRP.token_id(),
         source_address: HexBinary::from(source_address.as_bytes()),
-        destination_address: HexBinary::from(destination_address.as_bytes()),
+        destination_address: HexBinary::from(destination_address.to_bytes()),
         amount,
         data,
     };
@@ -478,7 +475,7 @@ fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
     assert!(matches!(
         //proof.status,
         proof,
-        xrpl_multisig_prover::msg::GetProofResponse::Completed { .. }
+        xrpl_multisig_prover::msg::ProofResponse::Completed { .. }
     ));
 
     let proof_msgs = vec![XRPLMessage::ProverMessage(

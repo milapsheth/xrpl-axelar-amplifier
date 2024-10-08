@@ -557,7 +557,7 @@ pub fn get_xrpl_verifier_set_from_prover(
 ) -> multisig::verifier_set::VerifierSet {
     let query_response: Result<_, StdError> = multisig_prover.query(
         app,
-        &xrpl_multisig_prover::msg::QueryMsg::GetVerifierSet,
+        &xrpl_multisig_prover::msg::QueryMsg::VerifierSet,
     );
     assert!(query_response.is_ok());
     query_response.unwrap()
@@ -567,10 +567,10 @@ pub fn get_xrpl_proof(
     app: &mut App,
     multisig_prover: &XRPLMultisigProverContract,
     multisig_session_id: &Uint64,
-) -> xrpl_multisig_prover::msg::GetProofResponse {
-    let query_response: Result<xrpl_multisig_prover::msg::GetProofResponse, StdError> = multisig_prover.query(
+) -> xrpl_multisig_prover::msg::ProofResponse {
+    let query_response: Result<xrpl_multisig_prover::msg::ProofResponse, StdError> = multisig_prover.query(
         app,
-        &xrpl_multisig_prover::msg::QueryMsg::GetProof {
+        &xrpl_multisig_prover::msg::QueryMsg::Proof {
             multisig_session_id: *multisig_session_id,
         },
     );
