@@ -152,9 +152,15 @@ pub fn execute(
     let querier = Querier::new(deps.querier, config.clone());
 
     let res = match msg {
-        // ExecuteMsg::TrustSet { xrpl_token } => {
-        //     // TODO
-        // }
+        ExecuteMsg::TrustSet { xrpl_token } => {
+            construct_trust_set_proof(
+                deps.storage,
+                &querier,
+                env.contract.address,
+                &config,
+                xrpl_token,
+            )
+        }
         // ExecuteMsg::RegisterToken {
         //     token_id,
         //     token,
@@ -163,25 +169,6 @@ pub fn execute(
         //     require_admin(&deps, info.clone())
         //         .or_else(|_| require_governance(&deps, info.clone()))?;
         //     register_token(deps.storage, token_id, &token, decimals)
-        // }
-        // ExecuteMsg::DeployInterchainToken {
-        //     destination_chain,
-        //     token_id,
-        //     name,
-        //     symbol,
-        //     decimals,
-        //     minter,
-        //     xrpl_token,
-        // } => {
-        //     require_admin(&deps, info.clone())
-        //         .or_else(|_| require_governance(&deps, info.clone()))?;
-        //     register_token(deps.storage, token_id, &token, decimals);
-        //     Response::new()
-        //         .add_message(wasm_execute(
-        //             config.gateway,
-        //             vec![],
-        //             vec![],
-        //         )?)
         // }
         ExecuteMsg::ConstructProof { message_id, payload } => {
             construct_payment_proof(
@@ -475,6 +462,26 @@ fn construct_ticket_create_proof(
     }
 
     let tx_hash = xrpl_multisig::issue_ticket_create(storage, config, ticket_count)?;
+
+    let cur_verifier_set_id = match CURRENT_VERIFIER_SET.may_load(storage)? {
+        Some(verifier_set) => Into::<multisig::verifier_set::VerifierSet>::into(verifier_set).id(),
+        None => {
+            return Err(ContractError::NoVerifierSet);
+        }
+    };
+
+    Ok(Response::new().add_submessage(start_signing_session(storage, config, tx_hash, self_address, cur_verifier_set_id)?))
+}
+
+fn construct_trust_set_proof(
+    storage: &mut dyn Storage,
+    querier: &Querier,
+    self_address: Addr,
+    config: &Config,
+    xrpl_token: XRPLToken,
+) -> Result<Response, ContractError> {
+    // TODO: check if trust set already set
+    let tx_hash = xrpl_multisig::issue_trust_set(storage, config, xrpl_token)?;
 
     let cur_verifier_set_id = match CURRENT_VERIFIER_SET.may_load(storage)? {
         Some(verifier_set) => Into::<multisig::verifier_set::VerifierSet>::into(verifier_set).id(),

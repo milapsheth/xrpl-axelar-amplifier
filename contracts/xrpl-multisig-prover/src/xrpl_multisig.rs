@@ -15,7 +15,7 @@ use crate::{
 fn issue_tx(
     storage: &mut dyn Storage,
     tx: XRPLUnsignedTx,
-    message_id: Option<CrossChainId>,
+    original_message_id: Option<CrossChainId>,
 ) -> Result<TxHash, ContractError> {
     let tx_hash = compute_unsigned_tx_hash(&tx)?;
 
@@ -25,7 +25,7 @@ fn issue_tx(
         &TransactionInfo {
             status: TransactionStatus::Pending,
             unsigned_contents: tx.clone(),
-            original_message_id: message_id,
+            original_message_id,
         },
     )?;
 
@@ -81,6 +81,23 @@ pub fn issue_ticket_create(
     };
 
     issue_tx(storage, XRPLUnsignedTx::TicketCreate(tx), None)
+}
+
+pub fn issue_trust_set(
+    storage: &mut dyn Storage,
+    config: &Config,
+    xrpl_token: XRPLToken,
+) -> Result<TxHash, ContractError> {
+    let sequence_number = get_next_sequence_number(storage)?;
+
+    let tx = XRPLTrustSetTx {
+        token: xrpl_token,
+        account: XRPLAccountId::from_str(config.xrpl_multisig.as_str())?,
+        fee: config.xrpl_fee,
+        sequence: XRPLSequence::Plain(sequence_number),
+    };
+
+    issue_tx(storage, XRPLUnsignedTx::TrustSet(tx), None)
 }
 
 pub fn issue_signer_list_set(
@@ -168,7 +185,7 @@ pub fn update_tx_status(
 
             Some(next_verifier_set)
         }
-        XRPLUnsignedTx::Payment(_) => None,
+        XRPLUnsignedTx::Payment(_) | XRPLUnsignedTx::TrustSet(_) => None, // nothing to do
     })
 }
 

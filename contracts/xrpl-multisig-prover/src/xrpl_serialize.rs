@@ -310,6 +310,7 @@ impl TryInto<XRPLObject> for XRPLUnsignedTx {
             XRPLUnsignedTx::Payment(tx) => tx.try_into(),
             XRPLUnsignedTx::TicketCreate(tx) => tx.try_into(),
             XRPLUnsignedTx::SignerListSet(tx) => tx.try_into(),
+            XRPLUnsignedTx::TrustSet(tx) => tx.try_into(),
         }
     }
 }

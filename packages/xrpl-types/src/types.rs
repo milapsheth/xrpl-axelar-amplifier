@@ -241,6 +241,7 @@ pub enum XRPLUnsignedTx {
     Payment(XRPLPaymentTx),
     SignerListSet(XRPLSignerListSetTx),
     TicketCreate(XRPLTicketCreateTx),
+    TrustSet(XRPLTrustSetTx),
 }
 
 impl XRPLUnsignedTx {
@@ -249,6 +250,7 @@ impl XRPLUnsignedTx {
             XRPLUnsignedTx::Payment(tx) => &tx.sequence,
             XRPLUnsignedTx::TicketCreate(tx) => &tx.sequence,
             XRPLUnsignedTx::SignerListSet(tx) => &tx.sequence,
+            XRPLUnsignedTx::TrustSet(tx) => &tx.sequence,
         }
     }
     pub fn sequence_number_increment(&self, status: TransactionStatus) -> u32 {
@@ -269,6 +271,10 @@ impl XRPLUnsignedTx {
                 TransactionStatus::Succeeded => tx.ticket_count + 1,
                 TransactionStatus::FailedOnChain => 1,
                 TransactionStatus::Inconclusive | TransactionStatus::Pending => unreachable!(),
+            },
+            XRPLUnsignedTx::TrustSet(tx) => match tx.sequence {
+                XRPLSequence::Plain(_) => 1,
+                XRPLSequence::Ticket(_) => 0,
             },
         }
     }

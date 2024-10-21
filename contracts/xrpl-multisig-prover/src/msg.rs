@@ -4,7 +4,7 @@ use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::{HexBinary, Uint64};
 use multisig::key::PublicKey;
 
-use xrpl_types::types::TxHash;
+use xrpl_types::types::{TxHash, XRPLToken};
 
 #[cw_serde]
 pub struct InstantiateMsg {
@@ -80,6 +80,10 @@ pub enum ExecuteMsg {
     },
     UpdateVerifierSet,
     TicketCreate,
+    // TODO: only admin
+    TrustSet {
+        xrpl_token: XRPLToken,
+    },
     UpdateSigningThreshold {
         new_signing_threshold: MajorityThreshold,
     },
