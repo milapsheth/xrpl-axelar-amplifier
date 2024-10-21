@@ -14,6 +14,7 @@ use xrpl_types::error::XRPLError;
 use xrpl_types::msg::XRPLMessage;
 use xrpl_types::types::*;
 
+use crate::msg::MigrateMsg;
 use crate::state::TOKEN_ID_TO_TOKEN_INFO;
 use crate::{
     axelar_workers::{self, VerifierSet},
@@ -601,9 +602,49 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn migrate(
-    _deps: DepsMut,
+    deps: DepsMut,
     _env: Env,
-    _msg: Empty,
+    msg: MigrateMsg,
 ) -> Result<Response, axelar_wasm_std::error::ContractError> {
+    CONFIG.remove(deps.storage);
+
+    let admin = deps.api.addr_validate(&msg.admin_address)?;
+    let governance = deps.api.addr_validate(&msg.governance_address)?;
+    let axelar_multisig = deps.api.addr_validate(&msg.axelar_multisig_address)?;
+    let coordinator = deps.api.addr_validate(&msg.coordinator_address)?;
+    let gateway = deps.api.addr_validate(&msg.gateway_address)?;
+    let voting_verifier = deps.api.addr_validate(&msg.voting_verifier_address)?;
+    let service_registry = deps.api.addr_validate(&msg.service_registry_address)?;
+
+    if msg.signing_threshold.numerator() > u32::MAX.into()
+        || msg.signing_threshold.denominator() == Uint64::zero()
+    {
+        return Err(ContractError::InvalidSigningThreshold.into());
+    }
+
+    let config = Config {
+        admin,
+        governance,
+        axelar_multisig,
+        coordinator,
+        gateway,
+        xrpl_multisig: msg.xrpl_multisig_address,
+        signing_threshold: msg.signing_threshold,
+        voting_verifier,
+        service_registry,
+        service_name: msg.service_name,
+        chain_name: msg.chain_name,
+        verifier_set_diff_threshold: msg.verifier_set_diff_threshold,
+        xrpl_fee: msg.xrpl_fee,
+        ticket_count_threshold: msg.ticket_count_threshold,
+        key_type: multisig::key::KeyType::Ecdsa,
+    };
+
+    CONFIG.save(deps.storage, &config)?;
+
+    NEXT_SEQUENCE_NUMBER.save(deps.storage, &msg.next_sequence_number)?;
+    LAST_ASSIGNED_TICKET_NUMBER.save(deps.storage, &msg.last_assigned_ticket_number)?;
+    AVAILABLE_TICKETS.save(deps.storage, &msg.available_tickets)?;
+
     Ok(Response::default())
 }

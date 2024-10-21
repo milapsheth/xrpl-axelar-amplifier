@@ -84,3 +84,24 @@ pub enum ExecuteMsg {
         new_signing_threshold: MajorityThreshold,
     },
 }
+
+#[cw_serde]
+pub struct MigrateMsg {
+    pub admin_address: String,
+    pub axelar_multisig_address: String,
+    pub gateway_address: String,
+    pub signing_threshold: MajorityThreshold,
+    pub xrpl_multisig_address: String,
+    pub voting_verifier_address: String,
+    pub service_registry_address: String,
+    pub coordinator_address: String,
+    pub service_name: String,
+    pub chain_name: ChainName,
+    pub verifier_set_diff_threshold: u32,
+    pub xrpl_fee: u64,
+    pub ticket_count_threshold: u32,
+    pub available_tickets: Vec<u32>,
+    pub next_sequence_number: u32,
+    pub last_assigned_ticket_number: u32,
+    pub governance_address: String,
+}
