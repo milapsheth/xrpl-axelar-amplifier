@@ -5,7 +5,7 @@ use router_api::{Address, CrossChainId, Message};
 use cosmwasm_std::{Addr, HexBinary, Uint128, Uint256};
 use multisig::key::KeyType;
 use integration_tests::contract::Contract;
-use xrpl_types::{msg::{CrossChainMessage, UserMessage, XRPLMessage, XRPLMessageWithPayload}, types::{XRPLAccountId, XRPLPaymentAmount, XRPLTokenOrXRP}};
+use xrpl_types::{msg::{CrossChainMessage, UserMessage, XRPLMessage, XRPLMessageWithPayload}, types::{XRPLAccountId, XRPLCurrency, XRPLPaymentAmount, XRPLToken, XRPLTokenOrXRP}};
 use interchain_token_service as its;
 use ethers_core::utils::keccak256;
 
@@ -181,6 +181,75 @@ fn xrpl_ticket_create_can_be_proven() {
         VerificationStatus::SucceededOnSourceChain
     );
 }
+
+#[test]
+fn xrpl_trust_line_can_be_proven() {
+    let test_utils::XRPLDestinationTestCase {
+        mut protocol,
+        xrpl,
+        verifiers,
+        ..
+    } = test_utils::setup_xrpl_destination_test_case();
+
+    let xrpl_token = XRPLToken {
+        currency: XRPLCurrency::try_from("BTC".to_string()).unwrap(),
+        issuer: XRPLAccountId::from_str("rNYjPW7NbiVDYy6K23b8ye6iZnowj4PsL7").unwrap(),
+    };
+
+    /* Create trust line */
+    let session_id = test_utils::construct_trust_set_proof_and_sign(
+        &mut protocol,
+        &xrpl.multisig_prover,
+        &verifiers,
+        xrpl_token,
+    );
+
+    // TODO: deduplicate all next steps with TicketCreate
+
+    let proof = test_utils::get_xrpl_proof(
+        &mut protocol.app,
+        &xrpl.multisig_prover,
+        &session_id,
+    );
+    assert!(matches!(
+        proof,
+        xrpl_multisig_prover::msg::ProofResponse::Completed { .. }
+    ));
+    println!("TrustSet proof: {:?}", proof);
+
+    let proof_msgs = vec![XRPLMessage::ProverMessage(
+        HexBinary::from_hex("2b67bbc8011a757087c3a263e41375ee2714a83f852a6d8fce7ee2baf5210d53")
+        .unwrap()
+        .as_slice()
+        .try_into()
+        .unwrap(),
+    )];
+
+    let (poll_id, expiry) = test_utils::verify_xrpl_messages(
+        &mut protocol.app,
+        &xrpl.gateway,
+        &proof_msgs,
+    );
+    test_utils::vote_success(
+        &mut protocol.app,
+        &xrpl.voting_verifier,
+        proof_msgs.len(),
+        &verifiers,
+        poll_id,
+    );
+    test_utils::advance_at_least_to_height(&mut protocol.app, expiry);
+    test_utils::end_poll(&mut protocol.app, &xrpl.voting_verifier, poll_id);
+
+    test_utils::xrpl_update_tx_status(
+        &mut protocol.app,
+        &xrpl.multisig_prover,
+        verifiers.iter().map(|w| (KeyType::Ecdsa, HexBinary::from(w.key_pair.encoded_verifying_key())).try_into().unwrap()).collect(),
+        session_id,
+        proof_msgs[0].tx_id(),
+        VerificationStatus::SucceededOnSourceChain
+    );
+}
+
 
 #[test]
 fn payment_from_xrpl_can_be_verified_and_routed_and_proven() {

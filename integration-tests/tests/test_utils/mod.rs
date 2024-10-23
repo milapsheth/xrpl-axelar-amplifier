@@ -4,7 +4,7 @@ use axelar_wasm_std::{
     nonempty, voting::{PollId, Vote}, Participant, Threshold, VerificationStatus
 };
 use axelarnet_gateway::ExecutableMessage;
-use xrpl_types::{msg::{XRPLHash, XRPLMessage, XRPLMessageWithPayload}, types::{XRPLAccountId, XRPL_MESSAGE_ID_FORMAT}};
+use xrpl_types::{msg::{XRPLHash, XRPLMessage, XRPLMessageWithPayload}, types::{XRPLAccountId, XRPLCurrency, XRPLToken, XRPL_MESSAGE_ID_FORMAT}};
 use std::collections::{HashMap, HashSet};
 
 use axelar_wasm_std::msg_id::HexTxHashAndEventIndex;
@@ -312,6 +312,23 @@ pub fn construct_xrpl_ticket_create_proof_and_sign(
         &mut protocol.app,
         Addr::unchecked("relayer"),
         &xrpl_multisig_prover::msg::ExecuteMsg::TicketCreate,
+    );
+    assert!(response.is_ok());
+    let response = response.unwrap();
+
+    sign_xrpl_proof(protocol, verifiers, response)
+}
+
+pub fn construct_trust_set_proof_and_sign(
+    protocol: &mut Protocol,
+    multisig_prover: &XRPLMultisigProverContract,
+    verifiers: &Vec<Verifier>,
+    xrpl_token: XRPLToken,
+) -> Uint64 {
+    let response = multisig_prover.execute(
+        &mut protocol.app,
+        Addr::unchecked("relayer"),
+        &xrpl_multisig_prover::msg::ExecuteMsg::TrustSet { xrpl_token },
     );
     assert!(response.is_ok());
     let response = response.unwrap();

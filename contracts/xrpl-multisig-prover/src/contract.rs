@@ -464,12 +464,9 @@ fn construct_trust_set_proof(
     // TODO: check if trust set already set
     let tx_hash = xrpl_multisig::issue_trust_set(storage, config, xrpl_token)?;
 
-    let cur_verifier_set_id = match CURRENT_VERIFIER_SET.may_load(storage)? {
-        Some(verifier_set) => Into::<multisig::verifier_set::VerifierSet>::into(verifier_set).id(),
-        None => {
-            return Err(ContractError::NoVerifierSet);
-        }
-    };
+    // TODO: deduplicate from other construct_*_proof functions:
+    let verifier_set = CURRENT_VERIFIER_SET.load(storage).map_err(|_| ContractError::NoVerifierSet)?;
+    let cur_verifier_set_id = Into::<multisig::verifier_set::VerifierSet>::into(verifier_set).id();
 
     Ok(Response::new().add_submessage(start_signing_session(storage, config, tx_hash, self_address, cur_verifier_set_id)?))
 }
