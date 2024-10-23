@@ -10013,8 +10013,6 @@ dependencies = [
  "cw2 1.1.2",
  "elliptic-curve",
  "error-stack",
- "gateway",
- "gateway-api",
  "generic-array",
  "hex",
  "interchain-token-service",
@@ -10029,6 +10027,7 @@ dependencies = [
  "sha2 0.10.8",
  "sha3",
  "thiserror",
+ "xrpl-gateway",
  "xrpl-types",
  "xrpl-voting-verifier",
 ]

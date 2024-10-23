@@ -1185,26 +1185,6 @@ pub fn setup_axelarnet(
     }
 }
 
-// TODO: remove
-// pub fn register_xrpl_token(
-//     protocol: &mut Protocol,
-//     multisig_prover: &XRPLMultisigProverContract,
-//     token_id: HexBinary,
-//     token: XRPLToken,
-//     decimals: u8,
-// ) {
-//     let response = multisig_prover.execute(
-//         &mut protocol.app,
-//         protocol.governance_address.clone(),
-//         &xrpl_multisig_prover::msg::ExecuteMsg::RegisterToken {
-//             token_id,
-//             token,
-//             decimals,
-//         },
-//     );
-//     assert!(response.is_ok());
-// }
-
 pub fn setup_xrpl(
     protocol: &mut Protocol,
     verifiers: &[Verifier],
@@ -1501,7 +1481,7 @@ pub fn setup_xrpl_source_test_case() -> XRPLSourceTestCase {
     let chains = vec![
         "XRPL".to_string().try_into().unwrap(),
         "Axelarnet".to_string().try_into().unwrap(),
-        "Ethereum".to_string().try_into().unwrap(),
+        "XRPL-EVM-Sidechain".to_string().try_into().unwrap(),
     ];
     let verifiers = create_new_verifiers_vec(
         chains.clone(),
@@ -1558,7 +1538,7 @@ pub struct XRPLDestinationTestCase {
 pub fn setup_xrpl_destination_test_case() -> XRPLDestinationTestCase {
     let mut protocol = setup_protocol("validators".to_string().try_into().unwrap());
     let chains = vec![
-        "Ethereum".to_string().try_into().unwrap(),
+        "XRPL-EVM-Sidechain".to_string().try_into().unwrap(),
         "Axelarnet".to_string().try_into().unwrap(),
         "XRPL".to_string().try_into().unwrap(),
     ];

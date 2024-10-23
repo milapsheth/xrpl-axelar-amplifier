@@ -1,7 +1,9 @@
 use axelar_wasm_std::error::extend_err;
 use cosmwasm_std::Storage;
 use error_stack::{report, Result, ResultExt};
+use interchain_token_service::TokenId;
 use router_api::{CrossChainId, Message};
+use xrpl_types::types::XRPLRemoteInterchainTokenInfo;
 
 use crate::contract::Error;
 use crate::state;
@@ -14,6 +16,18 @@ pub fn outgoing_messages(
         .into_iter()
         .map(|id| try_load_msg(storage, id))
         .fold(Ok(vec![]), accumulate_errs)
+}
+
+pub fn token_info(
+    storage: &dyn Storage,
+    token_id: TokenId,
+) -> Result<XRPLRemoteInterchainTokenInfo, Error> {
+    state::TOKEN_ID_TO_TOKEN_INFO
+        .may_load(storage, token_id.clone().into())
+        .change_context(Error::InvalidStoreAccess)
+        .transpose()
+        .unwrap_or(Err(report!(Error::TokenNotFound(token_id)))
+    )
 }
 
 fn try_load_msg(storage: &dyn Storage, id: CrossChainId) -> Result<Message, Error> {

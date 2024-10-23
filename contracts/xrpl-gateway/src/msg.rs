@@ -1,6 +1,7 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
-use cosmwasm_std::HexBinary;
-use xrpl_types::{msg::{XRPLMessage, XRPLMessageWithPayload}, types::XRPLTokenOrXRP};
+use cosmwasm_std::{HexBinary, Uint256};
+use interchain_token_service::TokenId;
+use xrpl_types::{msg::{XRPLMessage, XRPLMessageWithPayload}, types::{XRPLCurrency, XRPLRemoteInterchainTokenInfo, XRPLToken, XRPLTokenOrXRP}};
 use router_api::{ChainName, CrossChainId, Message};
 use msgs_derive::EnsurePermissions;
 
@@ -21,12 +22,11 @@ pub struct InstantiateMsg {
 }
 
 #[cw_serde]
-pub struct InterchainTokenDeployment {
-    pub xrpl_token: XRPLTokenOrXRP,
-    pub destination_chain: ChainName,
+pub struct InterchainTokenParams {
     pub name: String,
     pub symbol: String,
     pub decimals: u8,
+    pub initial_supply: Uint256,
     pub minter: HexBinary,
 }
 
@@ -36,12 +36,32 @@ pub enum ExecuteMsg {
     // TODO
     // #[permission(Specific(Admin))]
     #[permission(Any)]
-    DeployXrpToSidechain { sidechain_name: ChainName, params: HexBinary },
+    RegisterLocalInterchainToken {
+        xrpl_token: XRPLToken,
+    },
 
     // TODO
     // #[permission(Specific(Admin))]
     #[permission(Any)]
-    DeployInterchainToken(InterchainTokenDeployment),
+    RegisterRemoteInterchainToken {
+        token_id: TokenId,
+        xrpl_currency: XRPLCurrency,
+        canonical_decimals: u8,
+    },
+
+    // TODO
+    // #[permission(Specific(Admin))]
+    #[permission(Any)]
+    DeployXrpToSidechain { sidechain_name: ChainName, deployment_params: HexBinary },
+
+    // TODO
+    // #[permission(Specific(Admin))]
+    #[permission(Any)]
+    DeployInterchainToken {
+        xrpl_token: XRPLTokenOrXRP,
+        destination_chain: ChainName,
+        token_params: InterchainTokenParams,
+    },
 
     /// Before messages that are unknown to the system can be routed, they need to be verified.
     /// Use this call to trigger verification for any of the given messages that is still unverified.
@@ -67,4 +87,7 @@ pub enum QueryMsg {
     // messages that can be relayed to the chain corresponding to this gateway
     #[returns(Vec<Message>)]
     OutgoingMessages(Vec<CrossChainId>),
+
+    #[returns(XRPLRemoteInterchainTokenInfo)]
+    TokenInfo(TokenId),
 }

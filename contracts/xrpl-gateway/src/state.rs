@@ -5,6 +5,7 @@ use cw_storage_plus::{Item, Map};
 use error_stack::{Result, ResultExt};
 use interchain_token_service::TokenId;
 use router_api::{ChainName, CrossChainId, Message};
+use xrpl_types::types::XRPLRemoteInterchainTokenInfo;
 
 #[cw_serde]
 pub(crate) struct Config {
@@ -39,7 +40,8 @@ const CONFIG_NAME: &str = "config";
 const CONFIG: Item<Config> = Item::new(CONFIG_NAME);
 const OUTGOING_MESSAGES_NAME: &str = "outgoing_messages";
 pub const OUTGOING_MESSAGES: Map<&CrossChainId, Message> = Map::new(OUTGOING_MESSAGES_NAME);
-pub const XRPL_CURRENCY_TO_TOKEN_ID: Map<[u8; 20], TokenId> = Map::new("xrpl_currency_to_token_id");
+pub const XRPL_CURRENCY_TO_TOKEN_ID: Map<[u8; 20], TokenId> = Map::new("xrpl_currency_to_token_id"); // TODO: rename to indicate that this is only relevant for remote tokens
+pub const TOKEN_ID_TO_TOKEN_INFO: Map<[u8; 32], XRPLRemoteInterchainTokenInfo> = Map::new("token_id_to_token_info");
 pub const ROUTABLE_MESSAGES_INDEX: Counter<u32> = Counter::new("routable_message_index");
 
 #[cfg(test)]

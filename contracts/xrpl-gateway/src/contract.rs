@@ -3,6 +3,7 @@ use std::fmt::Debug;
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{Binary, Deps, DepsMut, Empty, Env, MessageInfo, Response};
+use interchain_token_service::TokenId;
 use crate::msg::{ExecuteMsg, QueryMsg};
 use router_api::CrossChainId;
 
@@ -83,6 +84,8 @@ pub enum Error {
     EventIndex,
     #[error("caller does not have the required permissions")]
     InvalidPermissions,
+    #[error("token with ID {0} not found")]
+    TokenNotFound(TokenId),
 }
 
 mod internal {
@@ -138,9 +141,24 @@ mod internal {
         };
 
         match msg.ensure_permissions(deps.storage, &info.sender).map_err(|_| Error::InvalidPermissions)? {
+            ExecuteMsg::RegisterLocalInterchainToken { xrpl_token } => contract::execute::register_local_interchain_token(
+                deps.storage,
+                xrpl_token,
+            ),
+            ExecuteMsg::RegisterRemoteInterchainToken {
+                token_id,
+                xrpl_currency,
+                canonical_decimals,
+            } => contract::execute::register_remote_interchain_token(
+                deps.storage,
+                &config.xrpl_multisig_address,
+                token_id,
+                xrpl_currency,
+                canonical_decimals,
+            ),
             ExecuteMsg::DeployXrpToSidechain {
                 sidechain_name,
-                params,
+                deployment_params,
             } => contract::execute::deploy_xrp_to_sidechain(
                 deps.storage,
                 env.block.height,
@@ -150,9 +168,13 @@ mod internal {
                 &config.xrpl_chain_name,
                 &sidechain_name,
                 &config.xrpl_multisig_address,
-                params,
+                deployment_params,
             ),
-            ExecuteMsg::DeployInterchainToken(params) => contract::execute::deploy_interchain_token(
+            ExecuteMsg::DeployInterchainToken {
+                xrpl_token,
+                destination_chain,
+                token_params,
+            } => contract::execute::deploy_interchain_token(
                 deps.storage,
                 env.block.height,
                 &router,
@@ -160,7 +182,9 @@ mod internal {
                 &config.axelar_chain_name,
                 &config.xrpl_chain_name,
                 &config.xrpl_multisig_address,
-                params,
+                xrpl_token,
+                destination_chain,
+                token_params,
             ),
             ExecuteMsg::VerifyMessages(msgs) => contract::execute::verify_messages(&verifier, msgs),
             // Should be called RouteOutgoingMessage.
@@ -189,6 +213,10 @@ mod internal {
             QueryMsg::OutgoingMessages(message_ids) => {
                 let msgs = contract::query::outgoing_messages(deps.storage, message_ids)?;
                 to_json_binary(&msgs).change_context(Error::SerializeResponse)
+            }
+            QueryMsg::TokenInfo(token_id) => {
+                let info = contract::query::token_info(deps.storage, token_id)?;
+                to_json_binary(&info).change_context(Error::SerializeResponse)
             }
         }
     }

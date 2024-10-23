@@ -9,14 +9,14 @@ use itertools::Itertools;
 use router_api::client::Router;
 use router_api::{Address, ChainName, CrossChainId, Message};
 use sha3::{Digest, Keccak256};
-use xrpl_types::types::{XRPLPaymentAmount, XRPLTokenOrXRP};
+use xrpl_types::types::{XRPLAccountId, XRPLCurrency, XRPLPaymentAmount, XRPLRemoteInterchainTokenInfo, XRPLToken, XRPLTokenOrXRP};
 use xrpl_voting_verifier::msg::MessageStatus;
 use xrpl_types::msg::{CrossChainMessage, XRPLMessage, XRPLMessageWithPayload};
-use interchain_token_service as its;
+use interchain_token_service::{self as its, TokenId};
 
 use crate::contract::Error;
 use crate::events::GatewayEvent;
-use crate::msg::InterchainTokenDeployment;
+use crate::msg::InterchainTokenParams;
 use crate::state;
 
 pub fn verify_messages(
@@ -85,6 +85,40 @@ pub(crate) fn route_outgoing_messages(
     ))
 }
 
+const XRPL_LOCAL_TOKEN_DECIMALS: u8 = 15;
+
+pub(crate) fn register_local_interchain_token(
+    storage: &mut dyn Storage,
+    xrpl_token: XRPLToken,
+) -> Result<Response, Error> {
+    let token_id = XRPLTokenOrXRP::Token(xrpl_token.clone()).token_id();
+    state::TOKEN_ID_TO_TOKEN_INFO.save(storage, token_id.into(), &XRPLRemoteInterchainTokenInfo {
+        xrpl_token: xrpl_token,
+        canonical_decimals: XRPL_LOCAL_TOKEN_DECIMALS,
+    }).unwrap();
+    Ok(Response::new())
+}
+
+pub(crate) fn register_remote_interchain_token(
+    storage: &mut dyn Storage,
+    xrpl_multisig_address: &String,
+    token_id: TokenId,
+    xrpl_currency: XRPLCurrency,
+    canonical_decimals: u8,
+) -> Result<Response, Error> {
+    let xrpl_token = XRPLToken {
+        currency: xrpl_currency.clone(),
+        issuer: XRPLAccountId::from_str(xrpl_multisig_address).unwrap(),
+    };
+    state::XRPL_CURRENCY_TO_TOKEN_ID.save(storage, xrpl_currency.into(), &token_id).unwrap();
+    state::TOKEN_ID_TO_TOKEN_INFO.save(storage, token_id.into(), &XRPLRemoteInterchainTokenInfo {
+        xrpl_token,
+        canonical_decimals,
+    }).unwrap();
+    Ok(Response::new())
+}
+
+// TODO: fix duplication with deploy_interchain_token
 pub(crate) fn deploy_xrp_to_sidechain(
     storage: &mut dyn Storage,
     block_height: u64,
@@ -94,7 +128,7 @@ pub(crate) fn deploy_xrp_to_sidechain(
     xrpl_chain_name: &ChainName,
     sidechain_name: &ChainName,
     xrpl_multisig_address: &String,
-    params: HexBinary,
+    deployment_params: HexBinary,
 ) -> Result<Response, Error> {
     let token_id = XRPLTokenOrXRP::XRP.token_id();
     let its_msg = its::HubMessage::SendToHub {
@@ -102,7 +136,7 @@ pub(crate) fn deploy_xrp_to_sidechain(
         message: its::Message::DeployTokenManager {
             token_id,
             token_manager_type: its::TokenManagerType::LockUnlock,
-            params,
+            params: deployment_params,
         },
     };
 
@@ -163,17 +197,20 @@ pub(crate) fn deploy_interchain_token(
     axelar_chain_name: &ChainName,
     xrpl_chain_name: &ChainName,
     xrpl_multisig_address: &String,
-    params: InterchainTokenDeployment,
+    xrpl_token: XRPLTokenOrXRP,
+    destination_chain: ChainName,
+    token_params: InterchainTokenParams,
 ) -> Result<Response, Error> {
-    let token_id = params.xrpl_token.token_id();
+    // TODO: register deployment and don't allow duplicate deployments
+    let token_id = xrpl_token.token_id();
     let its_msg = its::HubMessage::SendToHub {
-        destination_chain: params.destination_chain.into(),
+        destination_chain: destination_chain.into(),
         message: its::Message::DeployInterchainToken {
             token_id,
-            name: params.name,
-            symbol: params.symbol,
-            decimals: params.decimals,
-            minter: params.minter,
+            name: token_params.name,
+            symbol: token_params.symbol,
+            decimals: token_params.decimals,
+            minter: token_params.minter,
         }
     };
 
@@ -345,6 +382,14 @@ fn messages_into_events<T>(msgs: Vec<T>, transform: fn(T) -> GatewayEvent) -> Ve
     msgs.into_iter().map(|msg| transform(msg).into()).collect()
 }
 
+// TODO: remove: this conversion is temporary--will be handled by ITS Hub
+fn scale_up_drops(drops: u64, to_decimals: u8) -> Uint256 {
+    assert!(to_decimals > 6u8);
+    let drops_uint256 = Uint256::from(drops);
+    let scaling_factor = Uint256::from(10u128.pow(u32::from(to_decimals - 6u8)));
+    drops_uint256 * scaling_factor
+}
+
 fn to_its_message(
     store: &dyn Storage,
     msg: XRPLMessageWithPayload,
@@ -353,11 +398,17 @@ fn to_its_message(
     xrpl_multisig_address: &String,
 ) -> Message {
     match msg.message.clone() {
-        XRPLMessage::ProverMessage(_tx_hash) => todo!(),
+        XRPLMessage::ProverMessage(tx_hash) => todo!(),
         XRPLMessage::UserMessage(user_message) => {
-            let token_id: its::TokenId = match user_message.amount.clone() { // TODO: CASE-SENSITIVE?
+            let token_id: its::TokenId = match user_message.amount.clone() {
                 XRPLPaymentAmount::Drops(_) => XRPLTokenOrXRP::XRP.token_id(),
-                XRPLPaymentAmount::Token(token, _) => state::XRPL_CURRENCY_TO_TOKEN_ID.load(store, token.currency.to_bytes()).unwrap(),
+                XRPLPaymentAmount::Token(token, _) => {
+                    if token.issuer == XRPLAccountId::from_str(xrpl_multisig_address).unwrap() {
+                        state::XRPL_CURRENCY_TO_TOKEN_ID.load(store, token.currency.to_bytes()).unwrap() // TODO: handle error - function should return Result
+                    } else {
+                        XRPLTokenOrXRP::Token(token).token_id()
+                    }
+                }
             };
 
             // TODO: check that msg.payload matches user_message.payload_hash
@@ -365,7 +416,14 @@ fn to_its_message(
                 token_id,
                 source_address: HexBinary::from(&user_message.source_address.to_bytes()),
                 destination_address: user_message.destination_address,
-                amount: user_message.amount.into(),
+                amount: match user_message.amount {
+                    XRPLPaymentAmount::Drops(drops) => if user_message.destination_chain == ChainName::from_str("xrpl-evm-sidechain").unwrap() { // TODO: create XRPL_EVM_SIDECHAIN_NAME const
+                        scale_up_drops(drops, 18u8)
+                    } else {
+                        Uint256::from(drops)
+                    },
+                    XRPLPaymentAmount::Token(_, token_amount) => Uint256::from(u64::from_be_bytes(token_amount.to_bytes())),
+                },
                 data: msg.payload,
             };
 
@@ -395,7 +453,7 @@ fn send_interchain_token_transfer_to_hub() {
         //destination_address: HexBinary::from_hex("dBfA2ae8aF2FA445B71F1C504d4BDCf8c1Fd5bE9").unwrap(),
         destination_address: HexBinary::from_hex("d84f0525dC35448150Df0B83D5d0d574fa59785E").unwrap(),
         //amount: XRPLPaymentAmount::Drops(1420000).into(),
-        amount: XRPLPaymentAmount::Drops(1000000).into(),
+        amount: Uint256::from(1000000u64),
         // data: HexBinary::from(vec![]),
         data: HexBinary::from_hex("0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000001a4772656574696e67732066726f6d20746865205852504c203a29000000000000").unwrap(),
     };

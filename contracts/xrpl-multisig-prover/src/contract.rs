@@ -1,11 +1,12 @@
 use std::collections::HashSet;
+use std::str::FromStr;
 
 use axelar_wasm_std::{permission_control, FnExt};
 use axelar_wasm_std::{MajorityThreshold, VerificationStatus};
 use interchain_token_service as its;
-use router_api::CrossChainId;
+use router_api::{ChainNameRaw, CrossChainId};
 use cosmwasm_std::{
-    entry_point, to_json_binary, wasm_execute, Addr, Binary, Deps, DepsMut, Empty, Env, Fraction, HexBinary, MessageInfo, Reply, Response, StdResult, Storage, SubMsg, Uint128, Uint256, Uint64
+    entry_point, to_json_binary, wasm_execute, Addr, Binary, Deps, DepsMut, Env, Fraction, HexBinary, MessageInfo, Reply, Response, StdResult, Storage, SubMsg, Uint128, Uint256, Uint64
 };
 
 use multisig::{key::PublicKey, types::MultisigState};
@@ -15,7 +16,6 @@ use xrpl_types::msg::XRPLMessage;
 use xrpl_types::types::*;
 
 use crate::msg::MigrateMsg;
-use crate::state::TOKEN_ID_TO_TOKEN_INFO;
 use crate::{
     axelar_workers::{self, VerifierSet},
     error::ContractError,
@@ -116,17 +116,6 @@ pub fn require_governance(deps: &DepsMut, info: MessageInfo) -> Result<(), Contr
     }
 }
 
-// fn register_token(
-//     storage: &mut dyn Storage,
-//     token_id: HexBinary,
-//     token: &XRPLToken,
-//     decimals: u8,
-// ) -> Result<Response, ContractError> {
-//     // TODO: Validate token_id
-//     TOKEN_ID_TO_TOKEN_INFO.save(storage, &token_id.to_string(), &(token.clone(), decimals))?;
-//     Ok(Response::default())
-// }
-
 pub fn update_signing_threshold(
     deps: DepsMut,
     new_signing_threshold: MajorityThreshold,
@@ -151,25 +140,16 @@ pub fn execute(
     let config = CONFIG.load(deps.storage)?;
     let querier = Querier::new(deps.querier, config.clone());
 
-    let res = match msg {
+    Ok(match msg {
+        // TODO: only admin
         ExecuteMsg::TrustSet { xrpl_token } => {
             construct_trust_set_proof(
                 deps.storage,
-                &querier,
                 env.contract.address,
                 &config,
                 xrpl_token,
             )
         }
-        // ExecuteMsg::RegisterToken {
-        //     token_id,
-        //     token,
-        //     decimals,
-        // } => {
-        //     require_admin(&deps, info.clone())
-        //         .or_else(|_| require_governance(&deps, info.clone()))?;
-        //     register_token(deps.storage, token_id, &token, decimals)
-        // }
         ExecuteMsg::ConstructProof { message_id, payload } => {
             construct_payment_proof(
                 deps.storage,
@@ -210,13 +190,15 @@ pub fn execute(
             require_governance(&deps, info)?;
             update_signing_threshold(deps, new_signing_threshold)
         }
-    }?;
-
-    Ok(res)
+    }?)
 }
 
-fn scale_down_to_drops(amount: Uint256) -> u64 {
-    let scaling_factor = Uint256::from(1_000_000_000_000u64);
+const XRP_DECIMALS: u8 = 6;
+
+// TODO: remove: this conversion is temporary--will be handled by ITS Hub
+fn scale_down_to_drops(amount: Uint256, from_decimals: u8) -> u64 {
+    assert!(from_decimals > XRP_DECIMALS);
+    let scaling_factor = Uint256::from(10u128.pow(u32::from(from_decimals - XRP_DECIMALS)));
     let new_amount = Uint128::try_from(amount / scaling_factor).unwrap();
     u64::try_from(new_amount.u128()).unwrap()
 }
@@ -252,55 +234,55 @@ fn construct_payment_proof(
 
     let its_hub_message = its::HubMessage::abi_decode(payload.as_slice()).unwrap();
 
-    let its_transfer = match its_hub_message {
+    match its_hub_message {
         its::HubMessage::SendToHub { .. } => {
             Err(ContractError::InvalidPayload)
         },
         its::HubMessage::ReceiveFromHub { source_chain, message } => {
             match message {
                 interchain_token_service::Message::InterchainTransfer { token_id, source_address, destination_address, amount, data } => {
-                    Ok((token_id, source_address, destination_address, amount, data))
+                    let xrpl_payment_amount = if token_id == XRPLTokenOrXRP::XRP.token_id() { // TODO: don't compute XRP_TOKEN_ID every time
+                        let drops = if ChainNameRaw::from_str("xrpl-evm-sidechain").unwrap() == source_chain { // TODO: create XRPL_EVM_SIDECHAIN_NAME const
+                            scale_down_to_drops(amount, 18u8)
+                        } else {
+                            u64::try_from(Uint128::try_from(amount).unwrap().u128()).unwrap()
+                        };
+                        XRPLPaymentAmount::Drops(drops)
+                    } else {
+                        let token_info = querier.get_token_info(token_id)?;
+                        // TODO: handle decimal precision conversion
+                        XRPLPaymentAmount::Token(token_info.xrpl_token, canonicalize_coin_amount(Uint128::try_from(amount).unwrap(), token_info.canonical_decimals)?)
+                    };
+
+                    let destination_bytes: [u8; 20] = destination_address.as_slice().try_into().map_err(|_| ContractError::InvalidAddress)?;
+                    let tx_hash = xrpl_multisig::issue_payment(
+                        storage,
+                        config,
+                        XRPLAccountId::from_bytes(destination_bytes), // TODO
+                        &xrpl_payment_amount,
+                        &message_id,
+                    )?;
+
+                    let cur_verifier_set_id = match CURRENT_VERIFIER_SET.may_load(storage)? {
+                        Some(verifier_set) => Into::<multisig::verifier_set::VerifierSet>::into(verifier_set).id(),
+                        None => {
+                            return Err(ContractError::NoVerifierSet);
+                        }
+                    };
+
+                    REPLY_MESSAGE_ID.save(storage, &message_id)?;
+                    Ok(Response::new().add_submessage(start_signing_session(storage, config, tx_hash, self_address, cur_verifier_set_id)?))
                 },
-                interchain_token_service::Message::DeployInterchainToken { .. } |
+                interchain_token_service::Message::DeployInterchainToken { .. } => {
+                    // TODO: emit event with params
+                    Ok(Response::new())
+                },
                 interchain_token_service::Message::DeployTokenManager { .. } => {
                     Err(ContractError::InvalidPayload)
                 },
             }
         }
-    }?;
-
-    let (token_id, source_address, destination_address, amount, data) = its_transfer;
-    // let amount = Uint128::try_from(amount).unwrap();
-    let xrpl_payment_amount = if token_id == XRPLTokenOrXRP::XRP.token_id() {
-        // let drops =
-        //     u64::try_from(amount.u128()).map_err(|_| ContractError::InvalidAmount {
-        //         reason: "overflow".to_string(),
-        //     })?;
-        XRPLPaymentAmount::Drops(scale_down_to_drops(amount))
-    } else {
-        let token_info = TOKEN_ID_TO_TOKEN_INFO.load(storage, <[u8; 32]>::from(token_id))?;
-        // TODO: handle decimal precision conversion
-        XRPLPaymentAmount::Token(token_info.xrpl_token, canonicalize_coin_amount(Uint128::try_from(amount).unwrap(), token_info.decimals)?)
-    };
-
-    let destination_bytes: [u8; 20] = destination_address.as_slice().try_into().map_err(|_| ContractError::InvalidAddress)?;
-    let tx_hash = xrpl_multisig::issue_payment(
-        storage,
-        config,
-        XRPLAccountId::from_bytes(destination_bytes), // TODO
-        &xrpl_payment_amount,
-        &message_id,
-    )?;
-
-    let cur_verifier_set_id = match CURRENT_VERIFIER_SET.may_load(storage)? {
-        Some(verifier_set) => Into::<multisig::verifier_set::VerifierSet>::into(verifier_set).id(),
-        None => {
-            return Err(ContractError::NoVerifierSet);
-        }
-    };
-
-    REPLY_MESSAGE_ID.save(storage, &message_id)?;
-    Ok(Response::new().add_submessage(start_signing_session(storage, config, tx_hash, self_address, cur_verifier_set_id)?))
+    }
 }
 
 pub fn start_signing_session(
@@ -475,7 +457,6 @@ fn construct_ticket_create_proof(
 
 fn construct_trust_set_proof(
     storage: &mut dyn Storage,
-    querier: &Querier,
     self_address: Addr,
     config: &Config,
     xrpl_token: XRPLToken,

@@ -147,15 +147,21 @@ pub enum XRPLTokenOrXRP {
     XRP,
 }
 
+#[cw_serde]
+pub struct XRPLRemoteInterchainTokenInfo { // TODO: rename
+    pub xrpl_token: XRPLToken,
+    pub canonical_decimals: u8,
+}
+
 const ITS_INTERCHAIN_TOKEN_ID: &[u8] = "its-interchain-token-id".as_bytes();
 
 impl XRPLTokenOrXRP {
     pub fn token_id(&self) -> TokenId {
         let (deployer, salt) = match self {
             XRPLTokenOrXRP::Token(token) => {
-                (token.issuer.0, token.currency.clone().to_bytes().to_vec())
+                (token.issuer.to_bytes(), token.currency.clone().to_bytes().to_vec())
             },
-            XRPLTokenOrXRP::XRP => ([1u8; 20], "XRP".as_bytes().to_vec()), // TODO: switch back to [0; 20]
+            XRPLTokenOrXRP::XRP => ([0u8; 20], "XRP".as_bytes().to_vec()),
         };
         let prefix = Keccak256::digest(ITS_INTERCHAIN_TOKEN_ID);
         let token_id = Keccak256::digest(vec![prefix.as_slice(), &deployer, salt.as_slice()].concat());
@@ -164,27 +170,11 @@ impl XRPLTokenOrXRP {
     }
 }
 
-fn scale_up_xrp(drops: u64) -> Uint256 {
-    let drops_uint256 = Uint256::from(drops);
-    let scaling_factor = Uint256::from(1_000_000_000_000u64);
-    drops_uint256 * scaling_factor
-}
-
 #[cw_serde]
 #[derive(Eq, Hash)]
 pub enum XRPLPaymentAmount {
     Drops(u64),
     Token(XRPLToken, XRPLTokenAmount),
-}
-
-impl From<XRPLPaymentAmount> for Uint256 {
-    fn from(amount: XRPLPaymentAmount) -> Self {
-        match amount {
-            // TODO: REMOVE SCALING
-            XRPLPaymentAmount::Drops(drops) => scale_up_xrp(drops),
-            XRPLPaymentAmount::Token(_, token_amount) => Uint256::from(token_amount.mantissa), // TODO: FIX
-        }
-    }
 }
 
 // TODO: delete this
@@ -443,6 +433,12 @@ impl XRPLCurrency {
         let mut buffer = [0u8; 20];
         buffer[12..15].copy_from_slice(self.to_string().as_bytes());
         buffer
+    }
+}
+
+impl From<XRPLCurrency> for [u8; 20] {
+    fn from(currency: XRPLCurrency) -> [u8; 20] {
+        currency.to_bytes()
     }
 }
 

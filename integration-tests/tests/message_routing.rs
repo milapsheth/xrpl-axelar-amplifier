@@ -368,7 +368,7 @@ fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
     let destination_address: XRPLAccountId = XRPLAccountId::from_str("raNVNWvhUQzFkDDTdEw3roXRJfMJFVJuQo").unwrap();
 
     let destination_chain = xrpl.chain_name.clone();
-    let amount = Uint256::from(1000000000000000000u64);
+    let amount = Uint256::from(1000000000000000000u64); // 1 wrapped-XRP
     let data = HexBinary::from(vec![0]); // TODO: should be empty
 
     let interchain_transfer_msg = its::Message::InterchainTransfer {

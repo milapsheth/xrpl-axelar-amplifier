@@ -20,7 +20,7 @@ pub type XRPLHash = [u8; 32];
 #[cw_serde]
 #[derive(Eq, Hash)]
 pub struct XRPLMessageWithPayload {
-    pub message: XRPLMessage,
+    pub message: XRPLMessage, // TODO: Should be XRPLUserMessage
     pub payload: HexBinary,
 }
 

@@ -53,7 +53,5 @@ pub struct TokenInfo {
     pub decimals: u8,
 }
 
-pub const TOKEN_ID_TO_TOKEN_INFO: Map<[u8; 32], TokenInfo> = Map::new("token_id_to_token_info");
-
 pub const CURRENT_VERIFIER_SET: Item<VerifierSet> = Item::new("current_verifier_set");
 pub const NEXT_VERIFIER_SET: Item<VerifierSet> = Item::new("next_verifier_set");

@@ -1,10 +1,11 @@
 use axelar_wasm_std::VerificationStatus;
+use interchain_token_service::TokenId;
 use router_api::{CrossChainId, Message};
 use cosmwasm_schema::serde::{de::DeserializeOwned, Serialize};
 use cosmwasm_std::{to_json_binary, QuerierWrapper, QueryRequest, Uint64, WasmQuery};
 use multisig::{key::PublicKey, multisig::Multisig};
 use xrpl_voting_verifier::msg::MessageStatus;
-use xrpl_types::msg::XRPLMessage;
+use xrpl_types::{msg::XRPLMessage, types::XRPLRemoteInterchainTokenInfo};
 
 use crate::{error::ContractError, state::Config};
 
@@ -73,7 +74,7 @@ impl<'a> Querier<'a> {
         let messages: Vec<Message> = query(
             self.querier,
             self.config.gateway.to_string(),
-            &gateway_api::msg::QueryMsg::OutgoingMessages(
+            &xrpl_gateway::msg::QueryMsg::OutgoingMessages(
                 vec![message_id.clone()],
             ),
         )?;
@@ -81,6 +82,15 @@ impl<'a> Querier<'a> {
             .first()
             .cloned()
             .ok_or(ContractError::InvalidMessageID(message_id.message_id.to_string()))
+    }
+
+    pub fn get_token_info(&self, token_id: TokenId) -> Result<XRPLRemoteInterchainTokenInfo, ContractError> {
+        let token_info: XRPLRemoteInterchainTokenInfo = query(
+            self.querier,
+            self.config.gateway.to_string(),
+            &xrpl_gateway::msg::QueryMsg::TokenInfo(token_id),
+        )?;
+        Ok(token_info)
     }
 
     pub fn get_message_status(
