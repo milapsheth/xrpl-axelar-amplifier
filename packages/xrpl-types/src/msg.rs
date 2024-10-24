@@ -16,7 +16,6 @@ pub struct MemoDetails {
 
 pub type XRPLHash = [u8; 32];
 
-
 #[cw_serde]
 #[derive(Eq, Hash)]
 pub struct XRPLMessageWithPayload {
@@ -59,10 +58,34 @@ impl XRPLMessage {
     }
 }
 
+mod xrpl_account_id_hex {
+    use super::XRPLAccountId;
+    use serde::{Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &XRPLAccountId, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        axelar_wasm_std::hex::serialize(value.as_ref(), serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<XRPLAccountId, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let bytes: [u8; 20] = axelar_wasm_std::hex::deserialize(deserializer)?;
+        Ok(XRPLAccountId::from(bytes))
+    }
+}
+
 #[cw_serde]
 #[derive(Eq, Hash)]
 pub struct UserMessage {
+    #[serde(with = "axelar_wasm_std::hex")]
+    #[schemars(with = "String")] // necessary attribute in conjunction with #[serde(with ...)]
     pub tx_id: XRPLHash, // TODO: use TxHash from xrpl_multisig_prover
+    #[serde(with = "xrpl_account_id_hex")]
+    #[schemars(with = "String")] // necessary attribute in conjunction with #[serde(with ...)]
     pub source_address: XRPLAccountId,
     pub destination_chain: ChainName,
     pub destination_address: HexBinary,
@@ -145,8 +168,7 @@ impl CrossChainMessage for XRPLMessage {
     fn cc_id(&self) -> CrossChainId {
         CrossChainId {
             source_chain: ChainNameRaw::from_str(CHAIN_NAME).unwrap(),
-            // TODO: don't use event index format
-            message_id: format!("0x{}-0", HexBinary::from(self.tx_id()).to_string()).try_into().unwrap(),
+            message_id: format!("0x{}", HexBinary::from(self.tx_id()).to_hex()).try_into().unwrap(),
         }
     }
 }

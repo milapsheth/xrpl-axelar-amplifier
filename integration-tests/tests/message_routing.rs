@@ -301,7 +301,7 @@ fn payment_from_xrpl_can_be_verified_and_routed_and_proven() {
     let wrapped_msg = Message {
         cc_id: CrossChainId {
             source_chain: xrpl.chain_name.clone().into(),
-            message_id: "0x0000000000000000000000000000000000000000000000000000000000000000-0"
+            message_id: "0x0000000000000000000000000000000000000000000000000000000000000000"
                 .to_string()
                 .try_into()
                 .unwrap(),

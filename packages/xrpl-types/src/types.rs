@@ -50,8 +50,7 @@ pub enum TransactionStatus {
 #[cw_serde]
 pub struct TxHash(pub HexBinary);
 
-// TODO: should be HexTxHash
-pub const XRPL_MESSAGE_ID_FORMAT: axelar_wasm_std::msg_id::MessageIdFormat = axelar_wasm_std::msg_id::MessageIdFormat::HexTxHashAndEventIndex;
+pub const XRPL_MESSAGE_ID_FORMAT: axelar_wasm_std::msg_id::MessageIdFormat = axelar_wasm_std::msg_id::MessageIdFormat::HexTxHash;
 
 impl TryFrom<CrossChainId> for TxHash {
     type Error = XRPLError;
@@ -306,6 +305,7 @@ pub struct XRPLTrustSetTx {
 
 #[cw_serde]
 #[derive(Eq, Hash)]
+#[serde(transparent)]
 pub struct XRPLAccountId([u8; 20]);
 
 impl XRPLAccountId {
@@ -315,6 +315,18 @@ impl XRPLAccountId {
 
     pub fn from_bytes(bytes: [u8; 20]) -> Self {
         Self(bytes)
+    }
+}
+
+impl AsRef<[u8; 20]> for XRPLAccountId {
+    fn as_ref(&self) -> &[u8; 20] {
+        &self.0
+    }
+}
+
+impl From<[u8; 20]> for XRPLAccountId {
+    fn from(bytes: [u8; 20]) -> Self {
+        XRPLAccountId(bytes)
     }
 }
 

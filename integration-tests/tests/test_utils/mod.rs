@@ -4,7 +4,7 @@ use axelar_wasm_std::{
     nonempty, voting::{PollId, Vote}, Participant, Threshold, VerificationStatus
 };
 use axelarnet_gateway::ExecutableMessage;
-use xrpl_types::{msg::{XRPLHash, XRPLMessage, XRPLMessageWithPayload}, types::{XRPLAccountId, XRPLCurrency, XRPLToken, XRPL_MESSAGE_ID_FORMAT}};
+use xrpl_types::{msg::{XRPLHash, XRPLMessage, XRPLMessageWithPayload}, types::{XRPLAccountId, XRPLToken, XRPL_MESSAGE_ID_FORMAT}};
 use std::collections::{HashMap, HashSet};
 
 use axelar_wasm_std::msg_id::HexTxHashAndEventIndex;
@@ -121,7 +121,6 @@ pub fn route_xrpl_messages(app: &mut App, gateway: &XRPLGatewayContract, msgs: &
         Addr::unchecked("relayer"),
         &xrpl_gateway::msg::ExecuteMsg::RouteIncomingMessages(msgs.to_vec()),
     );
-    println!("route_xrpl_messages: {:?}", response);
     assert!(response.is_ok());
 }
 
@@ -336,6 +335,7 @@ pub fn construct_trust_set_proof_and_sign(
     sign_xrpl_proof(protocol, verifiers, response)
 }
 
+
 pub fn construct_xrpl_payment_proof_and_sign(
     protocol: &mut Protocol,
     multisig_prover: &XRPLMultisigProverContract,
@@ -480,7 +480,6 @@ pub fn execute_axelarnet_gateway_message(
             payload,
         },
     );
-    println!("{:?}", response);
     assert!(response.is_ok());
     response
         .unwrap()
