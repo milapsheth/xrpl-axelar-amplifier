@@ -285,7 +285,7 @@ mod tests {
             tx_id: [0; 32],
             source_address: format!("source-address{id}").parse().unwrap(),
             destination_chain: format!("destination-chain{id}").parse().unwrap(),
-            destination_address: HexBinary::from_hex("1234").unwrap(),
+            destination_address: nonempty::HexBinary::try_from(HexBinary::from_hex("1234").unwrap()).unwrap(),
             payload_hash: [0; 32],
             amount: XRPLPaymentAmount::Drops(100),
         })

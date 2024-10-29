@@ -55,8 +55,9 @@ valuable = { version = "0.1.0", features = ["derive"] }
 [dev-dependencies]
 assert_ok = { workspace = true }
 cw-multi-test = "0.15.1"
+goldie = { workspace = true }
 hex = { version = "0.4.3", default-features = false }
-rand = "0.8.5"
+rand = { workspace = true }
 
 [lints]
 workspace = true

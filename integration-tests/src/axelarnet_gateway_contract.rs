@@ -1,8 +1,10 @@
 use cosmwasm_std::Addr;
-use cw_multi_test::{App, ContractWrapper, Executor};
+use cw_multi_test::{ContractWrapper, Executor};
 use router_api::ChainName;
+use axelarnet_gateway::contract::{execute, instantiate, query};
 
 use crate::contract::Contract;
+use crate::protocol::AxelarApp;
 
 #[derive(Clone)]
 pub struct AxelarnetGatewayContract {
@@ -11,15 +13,12 @@ pub struct AxelarnetGatewayContract {
 
 impl AxelarnetGatewayContract {
     pub fn instantiate_contract(
-        app: &mut App,
+        app: &mut AxelarApp,
         chain_name: ChainName,
         router_address: Addr,
+        nexus_gateway: String,
     ) -> Self {
-        let code = ContractWrapper::new(
-            axelarnet_gateway::contract::execute,
-            axelarnet_gateway::contract::instantiate,
-            axelarnet_gateway::contract::query,
-        );
+        let code = ContractWrapper::new_with_empty(execute, instantiate, query);
         let code_id = app.store_code(Box::new(code));
 
         let contract_addr = app
@@ -29,6 +28,7 @@ impl AxelarnetGatewayContract {
                 &axelarnet_gateway::msg::InstantiateMsg {
                     chain_name,
                     router_address: router_address.to_string(),
+                    nexus_gateway,
                 },
                 &[],
                 "axelarnet_gateway",

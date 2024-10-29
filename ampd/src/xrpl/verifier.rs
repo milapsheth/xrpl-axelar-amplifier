@@ -92,6 +92,7 @@ mod test {
     use std::str::FromStr;
 
     use crate::xrpl::verifier::verify_memos;
+    use axelar_wasm_std::nonempty;
     use cosmwasm_std::HexBinary;
     use xrpl_http_client::{Amount, Memo};
     use xrpl_types::{msg::UserMessage, types::{XRPLAccountId, XRPLPaymentAmount}};
@@ -121,7 +122,7 @@ mod test {
         let user_message = UserMessage {
             tx_id: [0; 32],
             source_address: XRPLAccountId::from_str("raNVNWvhUQzFkDDTdEw3roXRJfMJFVJuQo").unwrap(),
-            destination_address: HexBinary::from_hex("592639c10223C4EC6C0ffc670e94d289A25DD1ad").unwrap(),
+            destination_address: nonempty::HexBinary::try_from(HexBinary::from_hex("592639c10223C4EC6C0ffc670e94d289A25DD1ad").unwrap()).unwrap(),
             destination_chain: ChainName::from_str("ethereum").unwrap(),
             payload_hash: hex::decode("feb30b51f41e4785664824dd0ee694e0d275757753f570e9f6b5e27d06197fa7").unwrap().to_vec().try_into().unwrap(),
             amount: XRPLPaymentAmount::Drops(100000),

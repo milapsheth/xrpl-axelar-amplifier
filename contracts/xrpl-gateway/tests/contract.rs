@@ -5,7 +5,7 @@ use std::iter;
 use std::str::FromStr;
 
 use axelar_wasm_std::error::ContractError;
-use axelar_wasm_std::{err_contains, VerificationStatus};
+use axelar_wasm_std::{err_contains, nonempty, VerificationStatus};
 use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info, MockQuerier};
 #[cfg(not(feature = "generate_golden_files"))]
 use cosmwasm_std::Response;
@@ -511,7 +511,7 @@ fn generate_incoming_msgs(namespace: impl Debug, count: u8) -> Vec<XRPLMessage> 
         .map(|i| XRPLMessage::UserMessage(UserMessage {
             tx_id: message_id(format!("{:?}{}", namespace, i).as_str()),
             amount: XRPLPaymentAmount::Drops(u64::from(i)*1_000_000),
-            destination_address: HexBinary::from_hex("1dc").unwrap(),
+            destination_address: nonempty::HexBinary::try_from(HexBinary::from_hex("1dc").unwrap()).unwrap(),
             destination_chain: "mock-chain-2".parse().unwrap(),
             source_address: XRPLAccountId::from_bytes([0; 20]), // TODO: random
             payload_hash: [i; 32],
@@ -522,7 +522,7 @@ fn generate_incoming_msgs(namespace: impl Debug, count: u8) -> Vec<XRPLMessage> 
 fn messages_with_payload(msgs: Vec<XRPLMessage>) -> Vec<XRPLMessageWithPayload> {
     msgs.into_iter().map(|msg| XRPLMessageWithPayload {
         message: msg,
-        payload: HexBinary::from_hex("0123456789abcdef").unwrap(),
+        payload: Some(nonempty::HexBinary::try_from(HexBinary::from_hex("0123456789abcdef").unwrap()).unwrap()),
     }).collect()
 }
 

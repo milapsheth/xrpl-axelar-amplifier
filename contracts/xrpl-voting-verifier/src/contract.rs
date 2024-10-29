@@ -188,7 +188,7 @@ mod test {
                 tx_id: message_id("id"),
                 source_address: XRPLAccountId::from_bytes([0; 20]), // TODO: random
                 destination_chain: format!("destination-chain{i}").parse().unwrap(),
-                destination_address: HexBinary::from_hex("1234").unwrap(),
+                destination_address: nonempty::HexBinary::try_from(HexBinary::from_hex("1234").unwrap()).unwrap(),
                 payload_hash: [0; 32],
                 amount: XRPLPaymentAmount::Drops(u64::from(i)*1_000_000),
             }))

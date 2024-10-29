@@ -11,7 +11,7 @@ use event_processor::EventHandler;
 use event_sub::EventSub;
 use evm::finalizer::{pick, Finalization};
 use evm::json_rpc::EthereumClient;
-use multiversx_sdk::blockchain::CommunicationProxy;
+use multiversx_sdk::gateway::GatewayProxy;
 use queue::queued_broadcaster::QueuedBroadcaster;
 use router_api::ChainName;
 use thiserror::Error;
@@ -69,6 +69,7 @@ async fn prepare_app(cfg: Config) -> Result<App<impl Broadcaster>, Error> {
         tofnd_config,
         event_processor,
         service_registry: _service_registry,
+        rewards: _rewards,
         health_check_bind_addr,
     } = cfg;
 
@@ -372,7 +373,7 @@ where
                     handlers::mvx_verify_msg::Handler::new(
                         verifier.clone(),
                         cosmwasm_contract,
-                        CommunicationProxy::new(proxy_url.to_string().trim_end_matches('/').into()),
+                        GatewayProxy::new(proxy_url.to_string().trim_end_matches('/').into()),
                         self.block_height_monitor.latest_block_height(),
                     ),
                     event_processor_config.clone(),
@@ -385,7 +386,7 @@ where
                     handlers::mvx_verify_verifier_set::Handler::new(
                         verifier.clone(),
                         cosmwasm_contract,
-                        CommunicationProxy::new(proxy_url.to_string().trim_end_matches('/').into()),
+                        GatewayProxy::new(proxy_url.to_string().trim_end_matches('/').into()),
                         self.block_height_monitor.latest_block_height(),
                     ),
                     event_processor_config.clone(),

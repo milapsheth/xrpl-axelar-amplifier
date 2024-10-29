@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use axelar_wasm_std::msg_id::HexTxHashAndEventIndex;
-use axelar_wasm_std::{FnExt, VerificationStatus};
-use cosmwasm_std::{Addr, Event, HexBinary, Response, Storage, Uint256, WasmMsg};
+use axelar_wasm_std::{nonempty, FnExt, VerificationStatus};
+use cosmwasm_std::{Addr, CosmosMsg, Event, HexBinary, Response, Storage, Uint256, WasmMsg};
 use error_stack::{report, Result, ResultExt};
 use itertools::Itertools;
 use router_api::client::Router;
@@ -37,10 +37,10 @@ pub(crate) fn route_incoming_messages(
     axelar_chain_name: &ChainName,
     xrpl_multisig_address: &String,
 ) -> Result<Response, Error> {
-    let msg_id_to_payload: HashMap<CrossChainId, HexBinary> = msgs.iter().map(|msg| (msg.message.cc_id(), msg.payload.clone())).collect();
+    let msg_id_to_payload: HashMap<CrossChainId, Option<nonempty::HexBinary>> = msgs.iter().map(|msg| (msg.message.cc_id(), msg.payload.clone())).collect();
     apply(verifier, msgs.into_iter().map(|m| m.message).collect(), |msgs_by_status| {
         let msgs_by_status = msgs_by_status.into_iter().map(|(status, msgs)| {
-            let payloads: Vec<HexBinary> = msgs.iter().map(|msg| msg_id_to_payload.get(&msg.cc_id()).unwrap().clone()).collect();
+            let payloads: Vec<Option<nonempty::HexBinary>> = msgs.iter().map(|msg| msg_id_to_payload.get(&msg.cc_id()).unwrap().clone()).collect();
             (status, msgs.into_iter().zip(payloads).map(|(msg, payload)| XRPLMessageWithPayload { message: msg, payload }).collect())
         }).collect();
         route(store, router, msgs_by_status, its_hub, axelar_chain_name, xrpl_multisig_address)
@@ -128,7 +128,7 @@ pub(crate) fn deploy_xrp_to_sidechain(
     xrpl_chain_name: &ChainName,
     sidechain_name: &ChainName,
     xrpl_multisig_address: &String,
-    deployment_params: HexBinary,
+    deployment_params: nonempty::HexBinary,
 ) -> Result<Response, Error> {
     let token_id = XRPLTokenOrXRP::XRP.token_id();
     let its_msg = its::HubMessage::SendToHub {
@@ -161,7 +161,7 @@ fn send_deploy_token_manager_to_hub() {
         message: its::Message::DeployTokenManager {
             token_id,
             token_manager_type: its::TokenManagerType::LockUnlock,
-            params: HexBinary::from_hex("0000000000000000000000000000000000000000000000000000000000000040000000000000000000000000d4949664cd82660aae99bedc034a0dea8a0bd51700000000000000000000000000000000000000000000000000000000000000140A90c0Af1B07f6AC34f3520348Dbfae73BDa358E000000000000000000000000").unwrap(),
+            params: nonempty::HexBinary::try_from(HexBinary::from_hex("0000000000000000000000000000000000000000000000000000000000000040000000000000000000000000d4949664cd82660aae99bedc034a0dea8a0bd51700000000000000000000000000000000000000000000000000000000000000140A90c0Af1B07f6AC34f3520348Dbfae73BDa358E000000000000000000000000").unwrap()).unwrap(),
         },
     };
 
@@ -179,7 +179,7 @@ fn receive_deploy_token_manager_from_hub() {
         message: its::Message::DeployTokenManager {
             token_id,
             token_manager_type: its::TokenManagerType::LockUnlock,
-            params: HexBinary::from_hex("0000000000000000000000000000000000000000000000000000000000000040000000000000000000000000a7baa2fe1df377147aaf49858b399f8c2564e8a400000000000000000000000000000000000000000000000000000000000000140A90c0Af1B07f6AC34f3520348Dbfae73BDa358E000000000000000000000000").unwrap(),
+            params: nonempty::HexBinary::try_from(HexBinary::from_hex("0000000000000000000000000000000000000000000000000000000000000040000000000000000000000000a7baa2fe1df377147aaf49858b399f8c2564e8a400000000000000000000000000000000000000000000000000000000000000140A90c0Af1B07f6AC34f3520348Dbfae73BDa358E000000000000000000000000").unwrap()).unwrap(),
         },
     };
 
@@ -247,7 +247,7 @@ fn generate_cross_chain_id(
 fn apply(
     verifier: &xrpl_voting_verifier::Client,
     msgs: Vec<XRPLMessage>,
-    action: impl Fn(Vec<(VerificationStatus, Vec<XRPLMessage>)>) -> (Option<WasmMsg>, Vec<Event>),
+    action: impl Fn(Vec<(VerificationStatus, Vec<XRPLMessage>)>) -> (Option<CosmosMsg>, Vec<Event>),
 ) -> Result<Response, Error> {
     check_for_duplicates(msgs)?
         .then(|msgs| verifier.messages_status(msgs.into_iter().map(|m| m.into()).collect()))
@@ -289,7 +289,7 @@ fn group_by_status(
 fn verify(
     verifier: &xrpl_voting_verifier::Client,
     msgs_by_status: Vec<(VerificationStatus, Vec<XRPLMessage>)>,
-) -> (Option<WasmMsg>, Vec<Event>) {
+) -> (Option<CosmosMsg>, Vec<Event>) {
     msgs_by_status
         .into_iter()
         .map(|(status, msgs)| {
@@ -309,7 +309,7 @@ fn route(
     its_hub: &Addr,
     axelar_chain_name: &ChainName,
     xrpl_multisig_address: &String,
-) -> (Option<WasmMsg>, Vec<Event>) {
+) -> (Option<CosmosMsg>, Vec<Event>) {
     msgs_by_status
         .into_iter()
         .map(|(status, msgs)| {
@@ -414,16 +414,16 @@ fn to_its_message(
             // TODO: check that msg.payload matches user_message.payload_hash
             let interchain_transfer = its::Message::InterchainTransfer {
                 token_id,
-                source_address: HexBinary::from(&user_message.source_address.to_bytes()),
+                source_address: nonempty::HexBinary::try_from(HexBinary::from(&user_message.source_address.to_bytes())).unwrap(),
                 destination_address: user_message.destination_address,
-                amount: match user_message.amount {
+                amount: nonempty::Uint256::try_from(match user_message.amount {
                     XRPLPaymentAmount::Drops(drops) => if user_message.destination_chain == ChainName::from_str("xrpl-evm-sidechain").unwrap() { // TODO: create XRPL_EVM_SIDECHAIN_NAME const
                         scale_up_drops(drops, 18u8)
                     } else {
                         Uint256::from(drops)
                     },
                     XRPLPaymentAmount::Token(_, token_amount) => Uint256::from(u64::from_be_bytes(token_amount.to_bytes())),
-                },
+                }).unwrap(),
                 data: msg.payload,
             };
 
@@ -449,13 +449,13 @@ fn to_its_message(
 fn send_interchain_token_transfer_to_hub() {
     let interchain_transfer = its::Message::InterchainTransfer {
         token_id: XRPLTokenOrXRP::XRP.token_id(),
-        source_address: HexBinary::from(xrpl_types::types::XRPLAccountId::from_str("rNM8ue6DZpneFC4gBEJMSEdbwNEBZjs3Dy").unwrap().to_bytes()),
+        source_address: nonempty::HexBinary::try_from(HexBinary::from(xrpl_types::types::XRPLAccountId::from_str("rNM8ue6DZpneFC4gBEJMSEdbwNEBZjs3Dy").unwrap().to_bytes())).unwrap(),
         //destination_address: HexBinary::from_hex("dBfA2ae8aF2FA445B71F1C504d4BDCf8c1Fd5bE9").unwrap(),
-        destination_address: HexBinary::from_hex("d84f0525dC35448150Df0B83D5d0d574fa59785E").unwrap(),
+        destination_address: nonempty::HexBinary::try_from(HexBinary::from_hex("d84f0525dC35448150Df0B83D5d0d574fa59785E").unwrap()).unwrap(),
         //amount: XRPLPaymentAmount::Drops(1420000).into(),
-        amount: Uint256::from(1000000u64),
-        // data: HexBinary::from(vec![]),
-        data: HexBinary::from_hex("0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000001a4772656574696e67732066726f6d20746865205852504c203a29000000000000").unwrap(),
+        amount: nonempty::Uint256::try_from(1000000u64).unwrap(),
+        // data: None,
+        data: Some(nonempty::HexBinary::try_from(HexBinary::from_hex("0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000001a4772656574696e67732066726f6d20746865205852504c203a29000000000000").unwrap()).unwrap()),
     };
 
     let its_msg = its::HubMessage::SendToHub {
@@ -473,13 +473,13 @@ fn receive_interchain_token_transfer_from_hub() {
         source_chain: ChainName::from_str("xrpl").unwrap().into(),
         message: its::Message::InterchainTransfer {
             token_id: XRPLTokenOrXRP::XRP.token_id(),
-            source_address: HexBinary::from(vec![146, 136, 70, 186, 245, 155, 212, 140, 40, 177, 49, 133, 84, 114, 208, 76, 147, 187, 208, 183]),
+            source_address: nonempty::HexBinary::try_from(HexBinary::from(vec![146, 136, 70, 186, 245, 155, 212, 140, 40, 177, 49, 133, 84, 114, 208, 76, 147, 187, 208, 183])).unwrap(),
             //destination_address: HexBinary::from_hex("dBfA2ae8aF2FA445B71F1C504d4BDCf8c1Fd5bE9").unwrap(),
-            destination_address: HexBinary::from_hex("d84f0525dC35448150Df0B83D5d0d574fa59785E").unwrap(),
-            // amount: Uint256::from(1420000000000000000u128),
-            amount: Uint256::from(1000000000000000000u128).into(),
+            destination_address: nonempty::HexBinary::try_from(HexBinary::from_hex("d84f0525dC35448150Df0B83D5d0d574fa59785E").unwrap()).unwrap(),
+            // amount: nonempty::Uint256::try_from(1420000000000000000u64).unwrap(),
+            amount: nonempty::Uint256::try_from(1000000000000000000u64).unwrap(),
             // data: HexBinary::from(vec![]),
-            data: HexBinary::from_hex("0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000001a4772656574696e67732066726f6d20746865205852504c203a29000000000000").unwrap(),
+            data: Some(nonempty::HexBinary::try_from(HexBinary::from_hex("0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000001a4772656574696e67732066726f6d20746865205852504c203a29000000000000").unwrap()).unwrap()),
         },
     };
 

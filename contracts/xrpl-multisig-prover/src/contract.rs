@@ -243,15 +243,15 @@ fn construct_payment_proof(
                 interchain_token_service::Message::InterchainTransfer { token_id, source_address, destination_address, amount, data } => {
                     let xrpl_payment_amount = if token_id == XRPLTokenOrXRP::XRP.token_id() { // TODO: don't compute XRP_TOKEN_ID every time
                         let drops = if ChainNameRaw::from_str("xrpl-evm-sidechain").unwrap() == source_chain { // TODO: create XRPL_EVM_SIDECHAIN_NAME const
-                            scale_down_to_drops(amount, 18u8)
+                            scale_down_to_drops(amount.into(), 18u8)
                         } else {
-                            u64::try_from(Uint128::try_from(amount).unwrap().u128()).unwrap()
+                            u64::try_from(Uint128::try_from(Uint256::from(amount)).unwrap().u128()).unwrap()
                         };
                         XRPLPaymentAmount::Drops(drops)
                     } else {
                         let token_info = querier.get_token_info(token_id)?;
                         // TODO: handle decimal precision conversion
-                        XRPLPaymentAmount::Token(token_info.xrpl_token, canonicalize_coin_amount(Uint128::try_from(amount).unwrap(), token_info.canonical_decimals)?)
+                        XRPLPaymentAmount::Token(token_info.xrpl_token, canonicalize_coin_amount(Uint128::try_from(Uint256::from(amount)).unwrap(), token_info.canonical_decimals)?)
                     };
 
                     let destination_bytes: [u8; 20] = destination_address.as_slice().try_into().map_err(|_| ContractError::InvalidAddress)?;
@@ -301,7 +301,10 @@ pub fn start_signing_session(
         sig_verifier: Some(self_address.into()),
     };
 
+    println!("start_signing_session: {:?}", start_sig_msg);
+    println!("multisig: {:?}", config.axelar_multisig);
     let wasm_msg = wasm_execute(&config.axelar_multisig, &start_sig_msg, vec![])?;
+    println!("wasm_msg: {:?}", wasm_msg);
 
    Ok(SubMsg::reply_on_success(wasm_msg, START_MULTISIG_REPLY_ID))
 }
@@ -363,7 +366,7 @@ fn update_verifier_set(
 
 }
 
-fn all_active_verifiers(storage: &mut dyn Storage) -> Result<HashSet<Addr>, ContractError> {
+fn all_active_verifiers(storage: &mut dyn Storage) -> Result<HashSet<String>, ContractError> {
     let current_signers = CURRENT_VERIFIER_SET
         .may_load(storage)?
         .map(|verifier_set| verifier_set.signers)
@@ -377,8 +380,8 @@ fn all_active_verifiers(storage: &mut dyn Storage) -> Result<HashSet<Addr>, Cont
     current_signers
         .iter()
         .chain(next_signers.iter())
-        .map(|signer| signer.address.clone())
-        .collect::<HashSet<Addr>>()
+        .map(|signer| signer.address.to_string())
+        .collect::<HashSet<String>>()
         .then(Ok)
 }
 
@@ -529,8 +532,8 @@ fn update_tx_status(
                         verifiers: confirmed_verifier_set
                             .signers
                             .iter()
-                            .map(|signer| signer.address.clone())
-                            .collect::<HashSet<Addr>>(),
+                            .map(|signer| signer.address.to_string())
+                            .collect::<HashSet<String>>(),
                     },
                     vec![],
                 )?)

@@ -84,7 +84,7 @@ pub fn verify_messages(
 
     Ok(Response::new().add_event(
         PollStarted::Messages {
-            messages: msgs_to_verify,
+            messages: msgs_to_verify, // TODO: validate msg id type
             metadata: PollMetadata {
                 poll_id: id,
                 source_gateway_address: config.source_gateway_address,

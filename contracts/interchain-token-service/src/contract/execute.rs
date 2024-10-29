@@ -21,6 +21,12 @@ pub enum Error {
     FailedItsContractRegistration(ChainNameRaw),
     #[error("failed to deregister its contract for chain {0}")]
     FailedItsContractDeregistration(ChainNameRaw),
+    #[error("failed to execute message")]
+    FailedExecuteMessage,
+    #[error("failed to query nexus")]
+    NexusQueryError,
+    #[error("storage error")]
+    StorageError,
 }
 
 /// Executes an incoming ITS message.
@@ -101,7 +107,7 @@ fn send_to_destination(
     let config = load_config(storage);
 
     let gateway: axelarnet_gateway::Client =
-        client::Client::new(querier, &config.axelarnet_gateway).into();
+        client::ContractClient::new(querier, &config.axelarnet_gateway).into();
 
     let call_contract_msg =
         gateway.call_contract(normalize(&destination_chain), destination_address, payload);

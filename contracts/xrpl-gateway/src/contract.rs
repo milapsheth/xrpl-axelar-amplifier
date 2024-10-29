@@ -90,7 +90,7 @@ pub enum Error {
 
 mod internal {
     use axelar_wasm_std::address;
-    use client::Client;
+    use client::ContractClient;
     use cosmwasm_std::{to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response};
     use error_stack::{Result, ResultExt};
     use crate::msg::{ExecuteMsg, QueryMsg};
@@ -134,12 +134,9 @@ mod internal {
         msg: ExecuteMsg,
     ) -> Result<Response, Error> {
         let config = state::load_config(deps.storage).change_context(Error::ConfigMissing)?;
-        let verifier = Client::new(deps.querier, &config.verifier).into();
+        let verifier = ContractClient::new(deps.querier, &config.verifier).into();
 
-        let router = Router {
-            address: config.router,
-        };
-
+        let router = Router::new(config.router);
         match msg.ensure_permissions(deps.storage, &info.sender).map_err(|_| Error::InvalidPermissions)? {
             ExecuteMsg::RegisterLocalInterchainToken { xrpl_token } => contract::execute::register_local_interchain_token(
                 deps.storage,

@@ -63,11 +63,6 @@ pub enum ProofResponse {
 
 #[cw_serde]
 pub enum ExecuteMsg {
-    // RegisterToken {
-    //     token_id: HexBinary,
-    //     token: XRPLToken,
-    //     decimals: u8,
-    // },
     ConstructProof {
         message_id: CrossChainId,
         payload: HexBinary,

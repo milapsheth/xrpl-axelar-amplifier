@@ -29,6 +29,8 @@ pub enum Error {
     RegisterItsContract,
     #[error("failed to deregsiter an its edge contract")]
     DeregisterItsContract,
+    #[error("too many coins attached. Execute accepts zero or one coins")]
+    TooManyCoins,
     #[error("failed to query its address")]
     QueryItsContract,
     #[error("failed to query all its addresses")]

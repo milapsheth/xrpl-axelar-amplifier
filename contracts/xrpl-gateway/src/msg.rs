@@ -1,5 +1,6 @@
+use axelar_wasm_std::nonempty;
 use cosmwasm_schema::{cw_serde, QueryResponses};
-use cosmwasm_std::{HexBinary, Uint256};
+use cosmwasm_std::Uint256;
 use interchain_token_service::TokenId;
 use xrpl_types::{msg::{XRPLMessage, XRPLMessageWithPayload}, types::{XRPLCurrency, XRPLRemoteInterchainTokenInfo, XRPLToken, XRPLTokenOrXRP}};
 use router_api::{ChainName, CrossChainId, Message};
@@ -23,11 +24,11 @@ pub struct InstantiateMsg {
 
 #[cw_serde]
 pub struct InterchainTokenParams {
-    pub name: String,
-    pub symbol: String,
+    pub name: nonempty::String,
+    pub symbol: nonempty::String,
     pub decimals: u8,
     pub initial_supply: Uint256,
-    pub minter: HexBinary,
+    pub minter: Option<nonempty::HexBinary>,
 }
 
 #[cw_serde]
@@ -52,7 +53,10 @@ pub enum ExecuteMsg {
     // TODO
     // #[permission(Specific(Admin))]
     #[permission(Any)]
-    DeployXrpToSidechain { sidechain_name: ChainName, deployment_params: HexBinary },
+    DeployXrpToSidechain {
+        sidechain_name: ChainName,
+        deployment_params: nonempty::HexBinary,
+    },
 
     // TODO
     // #[permission(Specific(Admin))]

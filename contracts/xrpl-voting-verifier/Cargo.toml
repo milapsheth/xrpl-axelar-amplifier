@@ -52,6 +52,7 @@ service-registry = { workspace = true, features = ["library"] }
 thiserror = { workspace = true }
 xrpl-types = { workspace = true }
 sha3 = { workspace = true }
+goldie = { workspace = true }
 
 [dev-dependencies]
 alloy-primitives = { version = "0.7.7", features = ["getrandom"] }

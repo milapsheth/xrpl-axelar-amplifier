@@ -2,7 +2,6 @@ use axelar_wasm_std::{nonempty, voting};
 use axelar_wasm_std_derive::IntoContractError;
 use cosmwasm_std::{OverflowError, StdError};
 use router_api::ChainName;
-use service_registry;
 use thiserror::Error;
 
 #[derive(Error, Debug, PartialEq, IntoContractError)]
@@ -18,9 +17,6 @@ pub enum ContractError {
 
     #[error(transparent)]
     NonEmptyError(#[from] nonempty::Error),
-
-    #[error(transparent)]
-    ServiceRegistryError(#[from] service_registry::ContractError),
 
     #[error("empty batch of messages")]
     EmptyMessages,

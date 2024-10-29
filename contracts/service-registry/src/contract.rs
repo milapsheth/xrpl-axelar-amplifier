@@ -6,10 +6,11 @@ use cosmwasm_std::{
     Storage,
 };
 use error_stack::{bail, Report, ResultExt};
+use service_registry_api::error::ContractError;
+use service_registry_api::{AuthorizationState, BondingState, Service};
 
-use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
-use crate::state::{AuthorizationState, BondingState, Service, SERVICES, VERIFIERS};
+use crate::state::{SERVICES, VERIFIERS};
 
 mod execute;
 mod migrations;
@@ -50,17 +51,24 @@ pub fn execute(
             bond_denom,
             unbonding_period_days,
             description,
-        } => execute::register_service(
-            deps,
+        } => {
+            let coordinator_contract = deps.api.addr_validate(&coordinator_contract)?;
+            execute::register_service(
+                deps,
+                service_name,
+                coordinator_contract,
+                min_num_verifiers,
+                max_num_verifiers,
+                min_verifier_bond,
+                bond_denom,
+                unbonding_period_days,
+                description,
+            )
+        }
+        ExecuteMsg::UpdateService {
             service_name,
-            coordinator_contract,
-            min_num_verifiers,
-            max_num_verifiers,
-            min_verifier_bond,
-            bond_denom,
-            unbonding_period_days,
-            description,
-        ),
+            updated_service_params,
+        } => execute::update_service(deps, service_name, updated_service_params),
         ExecuteMsg::AuthorizeVerifiers {
             verifiers,
             service_name,
@@ -137,10 +145,20 @@ fn match_verifier(
             | ExecuteMsg::DeregisterChainSupport { service_name, .. } => service_name,
             _ => bail!(permission_control::Error::WrongVariant),
         };
-        VERIFIERS
+        let res = VERIFIERS
             .load(storage, (service_name, sender))
             .map(|verifier| verifier.address)
-            .change_context(permission_control::Error::Unauthorized)
+            .change_context(ContractError::VerifierNotFound)
+            .change_context(permission_control::Error::Unauthorized);
+
+        // on error, check if the service even exists, and if it doesn't, return ServiceNotFound
+        if res.is_err() {
+            SERVICES
+                .load(storage, service_name)
+                .change_context(ContractError::ServiceNotFound)
+                .change_context(permission_control::Error::Unauthorized)?;
+        }
+        res
     }
 }
 
@@ -194,10 +212,11 @@ mod test {
         coins, from_json, CosmosMsg, Empty, OwnedDeps, StdResult, Uint128, WasmQuery,
     };
     use router_api::ChainName;
+    use service_registry_api::msg::{UpdatedServiceParams, VerifierDetails};
+    use service_registry_api::{Verifier, WeightedVerifier};
 
     use super::*;
-    use crate::msg::VerifierDetails;
-    use crate::state::{Verifier, WeightedVerifier, VERIFIER_WEIGHT};
+    use crate::state::VERIFIER_WEIGHT;
 
     const GOVERNANCE_ADDRESS: &str = "governance";
     const UNAUTHORIZED_ADDRESS: &str = "unauthorized";
@@ -238,7 +257,7 @@ mod test {
             mock_info(GOVERNANCE_ADDRESS, &[]),
             ExecuteMsg::RegisterService {
                 service_name: "validators".into(),
-                coordinator_contract: Addr::unchecked("nowhere"),
+                coordinator_contract: Addr::unchecked("nowhere").to_string(),
                 min_num_verifiers: 0,
                 max_num_verifiers: Some(100),
                 min_verifier_bond: Uint128::one().try_into().unwrap(),
@@ -255,7 +274,7 @@ mod test {
             mock_info(UNAUTHORIZED_ADDRESS, &[]),
             ExecuteMsg::RegisterService {
                 service_name: "validators".into(),
-                coordinator_contract: Addr::unchecked("nowhere"),
+                coordinator_contract: Addr::unchecked("nowhere").to_string(),
                 min_num_verifiers: 0,
                 max_num_verifiers: Some(100),
                 min_verifier_bond: Uint128::one().try_into().unwrap(),
@@ -265,6 +284,174 @@ mod test {
             },
         )
         .unwrap_err();
+        assert!(err_contains!(
+            err.report,
+            permission_control::Error,
+            permission_control::Error::PermissionDenied { .. }
+        ));
+    }
+
+    fn execute_register_service(deps: DepsMut, service_name: String) -> Service {
+        let service = Service {
+            name: service_name,
+            coordinator_contract: Addr::unchecked("coordinator"),
+            min_num_verifiers: 0,
+            max_num_verifiers: Some(100),
+            min_verifier_bond: Uint128::one().try_into().unwrap(),
+            bond_denom: AXL_DENOMINATION.into(),
+            unbonding_period_days: 10,
+            description: "amplifier service".into(),
+        };
+        let res = execute(
+            deps,
+            mock_env(),
+            mock_info(GOVERNANCE_ADDRESS, &[]),
+            ExecuteMsg::RegisterService {
+                service_name: service.name.clone(),
+                coordinator_contract: service.coordinator_contract.to_string(),
+                min_num_verifiers: service.min_num_verifiers,
+                max_num_verifiers: service.max_num_verifiers,
+                min_verifier_bond: service.min_verifier_bond,
+                bond_denom: service.bond_denom.clone(),
+                unbonding_period_days: service.unbonding_period_days,
+                description: service.description.clone(),
+            },
+        );
+        assert!(res.is_ok());
+        service
+    }
+
+    #[test]
+    fn update_service_should_update_all_values() {
+        let mut deps = setup();
+
+        let service_name = "validators";
+
+        let service = execute_register_service(deps.as_mut(), service_name.into());
+
+        // update all configurable values
+        let updated_params = UpdatedServiceParams {
+            min_num_verifiers: Some(service.min_num_verifiers + 1),
+            max_num_verifiers: Some(service.max_num_verifiers.map(|max| max + 1)),
+            min_verifier_bond: Some(
+                service
+                    .min_verifier_bond
+                    .into_inner()
+                    .strict_add(Uint128::one())
+                    .try_into()
+                    .unwrap(),
+            ),
+            unbonding_period_days: Some(service.unbonding_period_days + 1),
+        };
+
+        let res = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(GOVERNANCE_ADDRESS, &[]),
+            ExecuteMsg::UpdateService {
+                service_name: service_name.into(),
+                updated_service_params: updated_params.clone(),
+            },
+        );
+        assert!(res.is_ok());
+
+        let res: Service = from_json(
+            query(
+                deps.as_ref(),
+                mock_env(),
+                QueryMsg::Service {
+                    service_name: service.name.clone(),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        let expected_service = Service {
+            max_num_verifiers: updated_params.max_num_verifiers.unwrap(),
+            min_num_verifiers: updated_params.min_num_verifiers.unwrap(),
+            min_verifier_bond: updated_params.min_verifier_bond.unwrap(),
+            unbonding_period_days: updated_params.unbonding_period_days.unwrap(),
+            ..service
+        };
+        assert_eq!(res, expected_service);
+    }
+
+    #[test]
+    fn update_service_should_update_only_specified_values() {
+        let mut deps = setup();
+
+        let service_name = "verifiers";
+
+        let service = execute_register_service(deps.as_mut(), service_name.into());
+
+        // check None values are ignored
+        let new_min_bond = service
+            .min_verifier_bond
+            .into_inner()
+            .strict_add(Uint128::one())
+            .try_into()
+            .unwrap();
+        let res = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(GOVERNANCE_ADDRESS, &[]),
+            ExecuteMsg::UpdateService {
+                service_name: service_name.into(),
+                updated_service_params: UpdatedServiceParams {
+                    min_num_verifiers: None,
+                    max_num_verifiers: None,
+                    min_verifier_bond: Some(new_min_bond),
+                    unbonding_period_days: None,
+                },
+            },
+        );
+        assert!(res.is_ok());
+
+        let res: Service = from_json(
+            query(
+                deps.as_ref(),
+                mock_env(),
+                QueryMsg::Service {
+                    service_name: service_name.into(),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        let expected_service = Service {
+            min_verifier_bond: new_min_bond,
+            ..service
+        };
+        assert_eq!(res, expected_service);
+    }
+
+    #[test]
+    fn update_service_should_only_be_callable_by_governance() {
+        let mut deps = setup();
+
+        let service_name = "validators";
+
+        let service = execute_register_service(deps.as_mut(), service_name.into());
+        // check permissions are handled correctly
+        let res = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(UNAUTHORIZED_ADDRESS, &[]),
+            ExecuteMsg::UpdateService {
+                service_name: service.name,
+                updated_service_params: UpdatedServiceParams {
+                    min_num_verifiers: Some(10),
+                    max_num_verifiers: None,
+                    min_verifier_bond: None,
+                    unbonding_period_days: None,
+                },
+            },
+        );
+
+        assert!(res.is_err());
+        let err = res.unwrap_err();
         assert!(err_contains!(
             err.report,
             permission_control::Error,
@@ -283,7 +470,7 @@ mod test {
             mock_info(GOVERNANCE_ADDRESS, &[]),
             ExecuteMsg::RegisterService {
                 service_name: service_name.into(),
-                coordinator_contract: Addr::unchecked("nowhere"),
+                coordinator_contract: Addr::unchecked("nowhere").to_string(),
                 min_num_verifiers: 0,
                 max_num_verifiers: Some(100),
                 min_verifier_bond: Uint128::one().try_into().unwrap(),
@@ -334,7 +521,7 @@ mod test {
             mock_info(GOVERNANCE_ADDRESS, &[]),
             ExecuteMsg::RegisterService {
                 service_name: service_name.into(),
-                coordinator_contract: Addr::unchecked("nowhere"),
+                coordinator_contract: Addr::unchecked("nowhere").to_string(),
                 min_num_verifiers: 0,
                 max_num_verifiers: Some(100),
                 min_verifier_bond: min_verifier_bond.try_into().unwrap(),
@@ -382,7 +569,7 @@ mod test {
             mock_info(GOVERNANCE_ADDRESS, &[]),
             ExecuteMsg::RegisterService {
                 service_name: service_name.into(),
-                coordinator_contract: Addr::unchecked("nowhere"),
+                coordinator_contract: Addr::unchecked("nowhere").to_string(),
                 min_num_verifiers: 0,
                 max_num_verifiers: Some(100),
                 min_verifier_bond: min_verifier_bond.try_into().unwrap(),
@@ -427,7 +614,7 @@ mod test {
             mock_info(GOVERNANCE_ADDRESS, &[]),
             ExecuteMsg::RegisterService {
                 service_name: service_name.into(),
-                coordinator_contract: Addr::unchecked("nowhere"),
+                coordinator_contract: Addr::unchecked("nowhere").to_string(),
                 min_num_verifiers: 0,
                 max_num_verifiers: Some(100),
                 min_verifier_bond: min_verifier_bond.try_into().unwrap(),
@@ -530,7 +717,7 @@ mod test {
             mock_info(GOVERNANCE_ADDRESS, &[]),
             ExecuteMsg::RegisterService {
                 service_name: service_name.into(),
-                coordinator_contract: Addr::unchecked("nowhere"),
+                coordinator_contract: Addr::unchecked("nowhere").to_string(),
                 min_num_verifiers: 0,
                 max_num_verifiers: Some(100),
                 min_verifier_bond: min_verifier_bond.try_into().unwrap(),
@@ -617,7 +804,7 @@ mod test {
             mock_info(GOVERNANCE_ADDRESS, &[]),
             ExecuteMsg::RegisterService {
                 service_name: service_name.into(),
-                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS),
+                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS).to_string(),
                 min_num_verifiers: 0,
                 max_num_verifiers: Some(100),
                 min_verifier_bond: min_verifier_bond.try_into().unwrap(),
@@ -711,7 +898,7 @@ mod test {
             mock_info(GOVERNANCE_ADDRESS, &[]),
             ExecuteMsg::RegisterService {
                 service_name: service_name.into(),
-                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS),
+                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS).to_string(),
                 min_num_verifiers: 0,
                 max_num_verifiers: Some(100),
                 min_verifier_bond: min_verifier_bond.try_into().unwrap(),
@@ -836,7 +1023,7 @@ mod test {
             mock_info(GOVERNANCE_ADDRESS, &[]),
             ExecuteMsg::RegisterService {
                 service_name: service_name.into(),
-                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS),
+                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS).to_string(),
                 min_num_verifiers: 0,
                 max_num_verifiers: Some(100),
                 min_verifier_bond,
@@ -938,7 +1125,7 @@ mod test {
             mock_info(GOVERNANCE_ADDRESS, &[]),
             ExecuteMsg::RegisterService {
                 service_name: service_name.into(),
-                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS),
+                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS).to_string(),
                 min_num_verifiers: 0,
                 max_num_verifiers: Some(100),
                 min_verifier_bond,
@@ -1050,7 +1237,7 @@ mod test {
             mock_info(GOVERNANCE_ADDRESS, &[]),
             ExecuteMsg::RegisterService {
                 service_name: service_name.into(),
-                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS),
+                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS).to_string(),
                 min_num_verifiers: 0,
                 max_num_verifiers: Some(100),
                 min_verifier_bond,
@@ -1126,7 +1313,7 @@ mod test {
             mock_info(GOVERNANCE_ADDRESS, &[]),
             ExecuteMsg::RegisterService {
                 service_name: service_name.into(),
-                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS),
+                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS).to_string(),
                 min_num_verifiers: 0,
                 max_num_verifiers: Some(100),
                 min_verifier_bond,
@@ -1186,6 +1373,102 @@ mod test {
         assert_eq!(verifiers, vec![]);
     }
 
+    /// If a verifier registers support for a chain of an unregistered service,
+    /// process should return a contract error of type ServiceNotFound.
+    #[test]
+    fn register_single_chain_for_nonexistent_service() {
+        let mut deps = setup();
+
+        let service_name = "validators";
+        let chain_name = ChainName::from_str("ethereum").unwrap();
+        let err = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(VERIFIER_ADDRESS, &[]),
+            ExecuteMsg::RegisterChainSupport {
+                service_name: service_name.into(),
+                chains: vec![chain_name.clone()],
+            },
+        )
+        .unwrap_err();
+
+        assert!(err_contains!(
+            err.report,
+            ContractError,
+            ContractError::ServiceNotFound
+        ));
+    }
+
+    /// If a verifier deregisters support for a chain of an unregistered service,
+    /// process should return a contract error of type ServiceNotFound.
+    #[test]
+    fn deregister_single_chain_for_nonexistent_service() {
+        let mut deps = setup();
+
+        let service_name = "validators";
+        let chain_name = ChainName::from_str("ethereum").unwrap();
+        let err = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(VERIFIER_ADDRESS, &[]),
+            ExecuteMsg::DeregisterChainSupport {
+                service_name: service_name.into(),
+                chains: vec![chain_name.clone()],
+            },
+        )
+        .unwrap_err();
+
+        assert!(err_contains!(
+            err.report,
+            ContractError,
+            ContractError::ServiceNotFound
+        ));
+    }
+
+    /// If a verifier that is not part of a service registers support for a chain from that specific service,
+    /// process should return a contract error of type VerifierNotFound.
+    #[test]
+    fn register_from_unbonded_and_unauthorized_verifier_single_chain() {
+        let mut deps = setup();
+
+        let service_name = "validators";
+        let min_verifier_bond: nonempty::Uint128 = Uint128::new(100).try_into().unwrap();
+        let res = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(GOVERNANCE_ADDRESS, &[]),
+            ExecuteMsg::RegisterService {
+                service_name: service_name.into(),
+                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS).to_string(),
+                min_num_verifiers: 0,
+                max_num_verifiers: Some(100),
+                min_verifier_bond,
+                bond_denom: AXL_DENOMINATION.into(),
+                unbonding_period_days: 10,
+                description: "Some service".into(),
+            },
+        );
+        assert!(res.is_ok());
+
+        let chain_name = ChainName::from_str("ethereum").unwrap();
+        let err = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(VERIFIER_ADDRESS, &[]),
+            ExecuteMsg::RegisterChainSupport {
+                service_name: service_name.into(),
+                chains: vec![chain_name.clone()],
+            },
+        )
+        .unwrap_err();
+
+        assert!(err_contains!(
+            err.report,
+            ContractError,
+            ContractError::VerifierNotFound
+        ));
+    }
+
     /// If a verifier that is not part of a service deregisters support for a chain from that specific service,
     /// process should return a contract error of type VerifierNotFound.
     #[test]
@@ -1200,7 +1483,7 @@ mod test {
             mock_info(GOVERNANCE_ADDRESS, &[]),
             ExecuteMsg::RegisterService {
                 service_name: service_name.into(),
-                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS),
+                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS).to_string(),
                 min_num_verifiers: 0,
                 max_num_verifiers: Some(100),
                 min_verifier_bond,
@@ -1225,8 +1508,8 @@ mod test {
 
         assert!(err_contains!(
             err.report,
-            permission_control::Error,
-            permission_control::Error::WhitelistNotFound { .. }
+            ContractError,
+            ContractError::VerifierNotFound
         ));
 
         let verifiers: Vec<WeightedVerifier> = from_json(
@@ -1244,32 +1527,6 @@ mod test {
         assert_eq!(verifiers, vec![]);
     }
 
-    /// If a verifier deregisters support for a chain of an unregistered service,
-    /// process should return a contract error of type ServiceNotFound.
-    #[test]
-    fn deregister_single_chain_for_nonexistent_service() {
-        let mut deps = setup();
-
-        let service_name = "validators";
-        let chain_name = ChainName::from_str("ethereum").unwrap();
-        let err = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(VERIFIER_ADDRESS, &[]),
-            ExecuteMsg::DeregisterChainSupport {
-                service_name: service_name.into(),
-                chains: vec![chain_name.clone()],
-            },
-        )
-        .unwrap_err();
-
-        assert!(err_contains!(
-            err.report,
-            permission_control::Error,
-            permission_control::Error::WhitelistNotFound { .. }
-        ));
-    }
-
     #[test]
     fn unbond_verifier() {
         let mut deps = setup();
@@ -1282,7 +1539,7 @@ mod test {
             mock_info(GOVERNANCE_ADDRESS, &[]),
             ExecuteMsg::RegisterService {
                 service_name: service_name.into(),
-                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS),
+                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS).to_string(),
                 min_num_verifiers: 0,
                 max_num_verifiers: Some(100),
                 min_verifier_bond,
@@ -1366,7 +1623,7 @@ mod test {
             mock_info(GOVERNANCE_ADDRESS, &[]),
             ExecuteMsg::RegisterService {
                 service_name: service_name.into(),
-                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS),
+                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS).to_string(),
                 min_num_verifiers: 0,
                 max_num_verifiers: Some(100),
                 min_verifier_bond,
@@ -1409,7 +1666,7 @@ mod test {
             mock_info(GOVERNANCE_ADDRESS, &[]),
             ExecuteMsg::RegisterService {
                 service_name: service_name.into(),
-                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS),
+                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS).to_string(),
                 min_num_verifiers: 0,
                 max_num_verifiers: Some(100),
                 min_verifier_bond,
@@ -1472,7 +1729,7 @@ mod test {
             mock_info(GOVERNANCE_ADDRESS, &[]),
             ExecuteMsg::RegisterService {
                 service_name: service_name.into(),
-                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS),
+                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS).to_string(),
                 min_num_verifiers: 0,
                 max_num_verifiers: Some(100),
                 min_verifier_bond,
@@ -1546,7 +1803,7 @@ mod test {
             mock_info(GOVERNANCE_ADDRESS, &[]),
             ExecuteMsg::RegisterService {
                 service_name: service_name.into(),
-                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS),
+                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS).to_string(),
                 min_num_verifiers: 0,
                 max_num_verifiers: Some(100),
                 min_verifier_bond,
@@ -1633,7 +1890,7 @@ mod test {
             mock_info(GOVERNANCE_ADDRESS, &[]),
             ExecuteMsg::RegisterService {
                 service_name: service_name.into(),
-                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS),
+                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS).to_string(),
                 min_num_verifiers: 0,
                 max_num_verifiers: Some(100),
                 min_verifier_bond,
@@ -1742,7 +1999,7 @@ mod test {
             mock_info(GOVERNANCE_ADDRESS, &[]),
             ExecuteMsg::RegisterService {
                 service_name: service_name.into(),
-                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS),
+                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS).to_string(),
                 min_num_verifiers: 0,
                 max_num_verifiers: Some(100),
                 min_verifier_bond,
@@ -1864,7 +2121,7 @@ mod test {
             mock_info(GOVERNANCE_ADDRESS, &[]),
             ExecuteMsg::RegisterService {
                 service_name: service_name.into(),
-                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS),
+                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS).to_string(),
                 min_num_verifiers,
                 max_num_verifiers: Some(100),
                 min_verifier_bond,
@@ -1975,7 +2232,7 @@ mod test {
             mock_info(GOVERNANCE_ADDRESS, &[]),
             ExecuteMsg::RegisterService {
                 service_name: service_name.into(),
-                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS),
+                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS).to_string(),
                 min_num_verifiers: 0,
                 max_num_verifiers: Some(100),
                 min_verifier_bond,
@@ -2129,7 +2386,7 @@ mod test {
             mock_info(GOVERNANCE_ADDRESS, &[]),
             ExecuteMsg::RegisterService {
                 service_name: service_name.into(),
-                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS),
+                coordinator_contract: Addr::unchecked(COORDINATOR_ADDRESS).to_string(),
                 min_num_verifiers: 0,
                 max_num_verifiers: Some(100),
                 min_verifier_bond,

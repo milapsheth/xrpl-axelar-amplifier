@@ -1,8 +1,8 @@
 use std::str::FromStr;
 
-use axelar_wasm_std::VerificationStatus;
+use axelar_wasm_std::{nonempty, VerificationStatus};
 use router_api::{Address, CrossChainId, Message};
-use cosmwasm_std::{Addr, HexBinary, Uint128, Uint256};
+use cosmwasm_std::{Addr, HexBinary, Uint128};
 use multisig::key::KeyType;
 use integration_tests::contract::Contract;
 use xrpl_types::{msg::{CrossChainMessage, UserMessage, XRPLMessage, XRPLMessageWithPayload}, types::{XRPLAccountId, XRPLCurrency, XRPLPaymentAmount, XRPLToken, XRPLTokenOrXRP}};
@@ -264,11 +264,11 @@ fn payment_from_xrpl_can_be_verified_and_routed_and_proven() {
     } = test_utils::setup_xrpl_source_test_case();
 
     let source_address: XRPLAccountId = XRPLAccountId::from_str("raNVNWvhUQzFkDDTdEw3roXRJfMJFVJuQo").unwrap();
-    let destination_address: HexBinary = HexBinary::from_hex("95181d16cfb23Bc493668C17d973F061e30F2EAF").unwrap();
+    let destination_address: nonempty::HexBinary = nonempty::HexBinary::try_from(HexBinary::from_hex("95181d16cfb23Bc493668C17d973F061e30F2EAF").unwrap()).unwrap();
 
     let destination_chain_name = destination_chain.chain_name.clone();
     let amount = XRPLPaymentAmount::Drops(1000000); // 1 XRP
-    let payload = HexBinary::from(vec![0]); // TODO: should be empty
+    let payload: Option<nonempty::HexBinary> = None;
 
     let xrpl_msg = XRPLMessage::UserMessage(UserMessage {
         tx_id: [0; 32], // TODO
@@ -286,9 +286,9 @@ fn payment_from_xrpl_can_be_verified_and_routed_and_proven() {
 
     let interchain_transfer_msg = its::Message::InterchainTransfer {
         token_id: XRPLTokenOrXRP::XRP.token_id(),
-        source_address: HexBinary::from(source_address.to_bytes()),
+        source_address: nonempty::HexBinary::try_from(HexBinary::from(source_address.to_bytes())).unwrap(),
         destination_address,
-        amount: Uint256::from(1000000000000000000u128),
+        amount: nonempty::Uint256::try_from(1000000000000000000u64).unwrap(),
         // amount: Uint256::from(1000000u128), // 1 XRP
         data: payload,
     };
@@ -437,15 +437,15 @@ fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
     let destination_address: XRPLAccountId = XRPLAccountId::from_str("raNVNWvhUQzFkDDTdEw3roXRJfMJFVJuQo").unwrap();
 
     let destination_chain = xrpl.chain_name.clone();
-    let amount = Uint256::from(1000000000000000000u64); // 1 wrapped-XRP
-    let data = HexBinary::from(vec![0]); // TODO: should be empty
+    let amount = nonempty::Uint256::try_from(1000000000000000000u64).unwrap(); // 1 wrapped-XRP
+    let payload: Option<nonempty::HexBinary> = None;
 
     let interchain_transfer_msg = its::Message::InterchainTransfer {
         token_id: XRPLTokenOrXRP::XRP.token_id(),
-        source_address: HexBinary::from(source_address.as_bytes()),
-        destination_address: HexBinary::from(destination_address.to_bytes()),
+        source_address: nonempty::HexBinary::try_from(HexBinary::from(source_address.as_bytes())).unwrap(),
+        destination_address: nonempty::HexBinary::try_from(HexBinary::from(destination_address.to_bytes())).unwrap(),
         amount,
-        data,
+        data: payload,
     };
 
     let wrapped_payload = its::HubMessage::SendToHub {
@@ -514,8 +514,10 @@ fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
     );
 
     let its_hub_msg_ids = vec![CrossChainId::new(axelarnet.chain_name.clone(), its_hub_msg_id).unwrap()];
+    println!("its_hub_msg_ids: {:?}", its_hub_msg_ids);
     let routable_msgs =
         test_utils::routable_messages_from_axelarnet_gateway(&mut protocol.app, &axelarnet.gateway, &its_hub_msg_ids);
+    println!("routable_msgs: {:?}", routable_msgs);
     assert_eq!(routable_msgs.len(), 1);
 
     // check that the message can be found at the outgoing gateway

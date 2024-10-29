@@ -11,6 +11,8 @@ pub struct InstantiateMsg {
     pub chain_name: ChainName,
     /// Address of the router contract on axelar.
     pub router_address: String,
+    /// Address of the nexus gateway contract on axelar.
+    pub nexus_gateway: String,
 }
 
 #[cw_serde]
@@ -54,4 +56,20 @@ pub enum QueryMsg {
     /// Returns the chain name for this gateway.
     #[returns(ChainName)]
     ChainName,
+}
+
+// TODO: TEMPORARY
+#[cw_serde]
+// #[derive(EnsurePermissions)]
+pub enum NexusGatewayExecuteMsg {
+    /// Route a cross-chain contract call with token from Axelarnet to another chain.
+    /// Note: This only works when the destination chain is a legacy chain, and one and only one token has to be sent together.
+    // #[permission(Specific(axelarnet_gateway))]
+    RouteMessageWithToken(router_api::Message),
+    /// Route a cross-chain message from Axelarnet to another chain.
+    /// Note: This only works when the destination chain is a legacy chain.
+    // #[permission(Specific(router))]
+    RouteMessages(Vec<router_api::Message>),
+    // #[permission(Specific(nexus))]
+    RouteMessagesFromNexus(Vec<axelar_core_std::nexus::execute::Message>),
 }

@@ -1,5 +1,6 @@
 use std::str::FromStr;
 
+use axelar_wasm_std::nonempty;
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{Attribute, HexBinary};
 use router_api::{Address, ChainName, ChainNameRaw, CrossChainId, Message, FIELD_DELIMITER};
@@ -20,7 +21,7 @@ pub type XRPLHash = [u8; 32];
 #[derive(Eq, Hash)]
 pub struct XRPLMessageWithPayload {
     pub message: XRPLMessage, // TODO: Should be XRPLUserMessage
-    pub payload: HexBinary,
+    pub payload: Option<nonempty::HexBinary>,
 }
 
 impl From<XRPLMessageWithPayload> for XRPLMessage {
@@ -58,7 +59,7 @@ impl XRPLMessage {
     }
 }
 
-mod xrpl_account_id_hex {
+pub mod xrpl_account_id_hex {
     use super::XRPLAccountId;
     use serde::{Deserializer, Serializer};
 
@@ -88,7 +89,7 @@ pub struct UserMessage {
     #[schemars(with = "String")] // necessary attribute in conjunction with #[serde(with ...)]
     pub source_address: XRPLAccountId,
     pub destination_chain: ChainName,
-    pub destination_address: HexBinary,
+    pub destination_address: nonempty::HexBinary,
     /// for better user experience, the payload hash gets encoded into hex at the edges (input/output),
     /// but internally, we treat it as raw bytes to enforce its format.
     #[serde(with = "axelar_wasm_std::hex")]

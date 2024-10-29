@@ -34,9 +34,6 @@ pub enum ContractError {
     InvalidChainName,
 
     #[error(transparent)]
-    ServiceRegistryError(#[from] service_registry::ContractError),
-
-    #[error(transparent)]
     NonEmptyError(#[from] nonempty::Error),
 
     #[error("verifier set has not changed sufficiently since last update")]

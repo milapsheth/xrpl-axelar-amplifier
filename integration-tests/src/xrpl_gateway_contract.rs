@@ -1,8 +1,8 @@
 use cosmwasm_std::Addr;
-use cw_multi_test::{App, ContractWrapper, Executor};
+use cw_multi_test::{ContractWrapper, Executor};
 use router_api::ChainName;
 
-use crate::contract::Contract;
+use crate::{contract::Contract, protocol::AxelarApp};
 
 #[derive(Clone)]
 pub struct XRPLGatewayContract {
@@ -11,7 +11,7 @@ pub struct XRPLGatewayContract {
 
 impl XRPLGatewayContract {
     pub fn instantiate_contract(
-        app: &mut App,
+        app: &mut AxelarApp,
         router_address: Addr,
         verifier_address: Addr,
         its_hub_address: Addr,
@@ -19,7 +19,7 @@ impl XRPLGatewayContract {
         xrpl_chain_name: ChainName,
         xrpl_multisig_address: String,
     ) -> Self {
-        let code = ContractWrapper::new(
+        let code = ContractWrapper::new_with_empty(
             xrpl_gateway::contract::execute,
             xrpl_gateway::contract::instantiate,
             xrpl_gateway::contract::query,

@@ -16,10 +16,12 @@ use ripemd::Ripemd160;
 use sha2::{Digest, Sha256};
 use sha3::Keccak256;
 
-use crate::error::XRPLError;
 use axelar_wasm_std::Participant;
 use cosmwasm_std::Addr;
 use axelar_wasm_std::nonempty;
+
+use crate::error::XRPLError;
+use crate::msg::xrpl_account_id_hex;
 
 #[cw_serde]
 #[derive(Eq, Ord, PartialOrd)]
@@ -136,6 +138,8 @@ impl Operator {
 #[cw_serde]
 #[derive(Eq, Hash)]
 pub struct XRPLToken {
+    #[serde(with = "xrpl_account_id_hex")]
+    #[schemars(with = "String")] // necessary attribute in conjunction with #[serde(with ...)]
     pub issuer: XRPLAccountId,
     pub currency: XRPLCurrency,
 }
