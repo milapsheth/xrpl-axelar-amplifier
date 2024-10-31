@@ -35,7 +35,8 @@ pub enum Field {
     TicketCount,
     Signers,
     Signer,
-    LimitAmount
+    LimitAmount,
+    SendMax
 }
 
 impl Field {
@@ -62,6 +63,7 @@ impl Field {
             Field::Signers => 3,
             Field::Signer => 16,
             Field::LimitAmount => 3,
+            Field::SendMax => 9,
         }
     }
 }
@@ -246,6 +248,9 @@ impl TryInto<XRPLObject> for XRPLPaymentTx {
             Destination: self.destination,
         });
         obj.add_sequence(self.sequence)?;
+        if let Some(send_max) = self.send_max {
+            obj.add_field(Field::SendMax, send_max)?;
+        }
         Ok(obj)
     }
 }
@@ -637,10 +642,41 @@ mod tests {
                 XRPLTokenAmount::new(3369568318000000u64, -16),
             ),
             destination: XRPLAccountId::from_str("rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")?,
+            send_max: None
         };
         let encoded_unsigned_tx = XRPLUnsignedTx::Payment(unsigned_tx).xrpl_serialize()?;
         assert_eq!(
             "1200002200000000240000000161D44BF89AC2A40B800000000000000000000000004A50590000000000000000000000000000000000000000000000000168400000000000000C730081145B812C9D57731E27A2DA8B1830195F88EF32A3B68314B5F762798A53D543A014CAF8B297CFF8F2F937E8",
+            hex::encode_upper(encoded_unsigned_tx)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_cross_currency_payment_transaction() -> Result<(), ContractError> {
+        let unsigned_tx = XRPLPaymentTx {
+            account: XRPLAccountId::from_str("r9LqNeG6qHxjeUocjvVki2XR35weJ9mZgQ")?,
+            fee: 12,
+            sequence: XRPLSequence::Plain(1),
+            amount: XRPLPaymentAmount::Token(
+                XRPLToken {
+                    currency: "JPY".to_string().try_into()?,
+                    issuer: XRPLAccountId::from_str("rrrrrrrrrrrrrrrrrrrrBZbvji")?,
+                },
+                XRPLTokenAmount::new(3369568318000000u64, -16),
+            ),
+            destination: XRPLAccountId::from_str("rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")?,
+            send_max: Some(XRPLPaymentAmount::Token(
+                XRPLToken {
+                    currency: "USD".to_string().try_into()?,
+                    issuer: XRPLAccountId::from_str("rw2521mDNXyKzHBrFGZ5Rj4wzUjS9FbiZq")?,
+                },
+                XRPLTokenAmount::new(8765432100000000u64, -16),
+            ))
+        };
+        let encoded_unsigned_tx = XRPLUnsignedTx::Payment(unsigned_tx).xrpl_serialize()?;
+        assert_eq!(
+            "1200002200000000240000000161D44BF89AC2A40B800000000000000000000000004A50590000000000000000000000000000000000000000000000000168400000000000000C69D45F241D329F910000000000000000000000000055534400000000006919924835FA51D3991CDF5CF4505781227686E6730081145B812C9D57731E27A2DA8B1830195F88EF32A3B68314B5F762798A53D543A014CAF8B297CFF8F2F937E8",
             hex::encode_upper(encoded_unsigned_tx)
         );
         Ok(())
@@ -654,6 +690,7 @@ mod tests {
             sequence: XRPLSequence::Plain(1),
             amount: XRPLPaymentAmount::Drops(1000),
             destination: XRPLAccountId::from_str("rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")?,
+            send_max: None
         };
         let encoded_unsigned_tx = &XRPLUnsignedTx::Payment(tx).xrpl_serialize()?;
         assert_eq!(
@@ -667,6 +704,7 @@ mod tests {
             sequence: XRPLSequence::Plain(43497363),
             amount: XRPLPaymentAmount::Drops(1000000000),
             destination: XRPLAccountId::from_str("rw2521mDNXyKzHBrFGZ5Rj4wzUjS9FbiZq")?,
+            send_max: None
         };
         let encoded_unsigned_tx = &XRPLUnsignedTx::Payment(tx).xrpl_serialize()?;
         assert_eq!(
@@ -689,6 +727,7 @@ mod tests {
                 sequence: XRPLSequence::Ticket(44218193),
                 amount: XRPLPaymentAmount::Drops(100000000),
                 destination: XRPLAccountId::from_str("rfgqgX62inhKsfti1NR6FeMS8NcQJCFniG")?,
+                send_max: None,
             }), signers: vec![
                 XRPLSigner{
                     account: XRPLAccountId::from_str("r3mJFUQeVQma7qucT4iQSNCWuijVCPcicZ")?,
@@ -719,6 +758,7 @@ mod tests {
                 sequence: XRPLSequence::Ticket(44218193),
                 amount: XRPLPaymentAmount::Drops(100000000),
                 destination: XRPLAccountId::from_str("rfgqgX62inhKsfti1NR6FeMS8NcQJCFniG")?,
+                send_max: None
             }), signers: vec![
                 XRPLSigner{
                     account: XRPLAccountId::from_str("rHxbKjRSFUUyuiio1jnFhimJRVAYYaGj7f")?,
@@ -752,6 +792,7 @@ mod tests {
                     issuer: XRPLAccountId::from_str("r4ZMbbb4Y3KoeexmjEeTdhqUBrYjjWdyGM")?
                 }, canonicalize_coin_amount(Uint128::from(100000000u128), 0)?),
                 destination: XRPLAccountId::from_str("raNVNWvhUQzFkDDTdEw3roXRJfMJFVJuQo")?,
+                send_max: None
             }), signers: vec![
                 XRPLSigner{
                     account: XRPLAccountId::from_str("rBTmbPMAWghUv52pCCtkLYh5SPVy2PuDSj")?,

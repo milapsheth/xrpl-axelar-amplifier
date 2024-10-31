@@ -47,6 +47,7 @@ pub fn issue_payment(
     destination: XRPLAccountId,
     amount: &XRPLPaymentAmount,
     message_id: &CrossChainId,
+    send_max: Option<&XRPLPaymentAmount>,
 ) -> Result<TxHash, ContractError> {
     let ticket_number = assign_ticket_number(storage, message_id)?;
 
@@ -57,6 +58,7 @@ pub fn issue_payment(
         amount: amount.clone(),
         // destination: XRPLAccountId::from_str(destination.as_str())?,
         destination,
+        send_max: send_max.cloned()
     };
 
     issue_tx(

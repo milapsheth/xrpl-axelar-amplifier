@@ -280,6 +280,7 @@ pub struct XRPLPaymentTx {
     pub fee: u64,
     pub sequence: XRPLSequence,
     pub amount: XRPLPaymentAmount,
+    pub send_max: Option<XRPLPaymentAmount>,
     pub destination: XRPLAccountId,
 }
 
