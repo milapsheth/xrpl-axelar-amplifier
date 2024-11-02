@@ -514,10 +514,8 @@ fn payment_towards_xrpl_can_be_verified_and_routed_and_proven() {
     );
 
     let its_hub_msg_ids = vec![CrossChainId::new(axelarnet.chain_name.clone(), its_hub_msg_id).unwrap()];
-    println!("its_hub_msg_ids: {:?}", its_hub_msg_ids);
     let routable_msgs =
         test_utils::routable_messages_from_axelarnet_gateway(&mut protocol.app, &axelarnet.gateway, &its_hub_msg_ids);
-    println!("routable_msgs: {:?}", routable_msgs);
     assert_eq!(routable_msgs.len(), 1);
 
     // check that the message can be found at the outgoing gateway

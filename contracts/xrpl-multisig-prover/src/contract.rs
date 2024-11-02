@@ -301,10 +301,7 @@ pub fn start_signing_session(
         sig_verifier: Some(self_address.into()),
     };
 
-    println!("start_signing_session: {:?}", start_sig_msg);
-    println!("multisig: {:?}", config.axelar_multisig);
     let wasm_msg = wasm_execute(&config.axelar_multisig, &start_sig_msg, vec![])?;
-    println!("wasm_msg: {:?}", wasm_msg);
 
    Ok(SubMsg::reply_on_success(wasm_msg, START_MULTISIG_REPLY_ID))
 }

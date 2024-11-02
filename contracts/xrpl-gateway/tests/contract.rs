@@ -13,7 +13,7 @@ use cosmwasm_std::{
     from_json, to_json_binary, Addr, ContractResult, DepsMut, HexBinary, QuerierResult, WasmQuery
 };
 use sha3::{Keccak256, Digest};
-use xrpl_gateway::contract::*;
+use xrpl_gateway::{contract::*, state};
 use xrpl_gateway::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
 use itertools::Itertools;
 use rand::{thread_rng, Rng};
@@ -370,8 +370,8 @@ fn reject_reroute_outgoing_message_with_different_contents() {
     );
     assert!(response.is_err_and(|err| err_contains!(
         err.report,
-        Error,
-        Error::MessageMismatch { .. }
+        state::Error,
+        state::Error::MessageMismatch { .. }
     )));
 }
 
@@ -511,7 +511,7 @@ fn generate_incoming_msgs(namespace: impl Debug, count: u8) -> Vec<XRPLMessage> 
         .map(|i| XRPLMessage::UserMessage(UserMessage {
             tx_id: message_id(format!("{:?}{}", namespace, i).as_str()),
             amount: XRPLPaymentAmount::Drops(u64::from(i)*1_000_000),
-            destination_address: nonempty::HexBinary::try_from(HexBinary::from_hex("1dc").unwrap()).unwrap(),
+            destination_address: nonempty::HexBinary::try_from(HexBinary::from_hex("01dc").unwrap()).unwrap(),
             destination_chain: "mock-chain-2".parse().unwrap(),
             source_address: XRPLAccountId::from_bytes([0; 20]), // TODO: random
             payload_hash: [i; 32],

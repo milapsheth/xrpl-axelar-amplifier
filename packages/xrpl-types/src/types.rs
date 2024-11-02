@@ -337,7 +337,7 @@ impl From<[u8; 20]> for XRPLAccountId {
 #[test]
 fn test_xrpl_account_id_from_string() {
     let xrpl_account = "rNM8ue6DZpneFC4gBEJMSEdbwNEBZjs3Dy";
-    println!("XRPLAccountId from string: {:?}", XRPLAccountId::from_str(xrpl_account).unwrap().to_bytes());
+    assert_eq!(XRPLAccountId::from_str(xrpl_account).unwrap().to_bytes(), [146, 136, 70, 186, 245, 155, 212, 140, 40, 177, 49, 133, 84, 114, 208, 76, 147, 187, 208, 183]);
 }
 
 impl Display for XRPLAccountId {

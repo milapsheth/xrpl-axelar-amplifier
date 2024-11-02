@@ -1,59 +1,47 @@
 use axelar_wasm_std::error::extend_err;
-use cosmwasm_std::Storage;
-use error_stack::{report, Result, ResultExt};
+use cosmwasm_std::{to_json_binary, Binary, Storage};
+use error_stack::Result;
 use interchain_token_service::TokenId;
 use router_api::{CrossChainId, Message};
-use xrpl_types::types::XRPLRemoteInterchainTokenInfo;
 
-use crate::contract::Error;
 use crate::state;
 
-pub fn outgoing_messages(
+pub fn outgoing_messages<'a>(
     storage: &dyn Storage,
-    cross_chain_ids: Vec<CrossChainId>,
-) -> Result<Vec<Message>, Error> {
-    cross_chain_ids
-        .into_iter()
-        .map(|id| try_load_msg(storage, id))
-        .fold(Ok(vec![]), accumulate_errs)
+    cross_chain_ids: impl Iterator<Item = &'a CrossChainId>,
+) -> Result<Binary, state::Error> {
+    let msgs = cross_chain_ids
+        .map(|id| state::load_outgoing_message(storage, id))
+        .fold(Ok(vec![]), accumulate_errs)?;
+
+    Ok(to_json_binary(&msgs).map_err(state::Error::from)?)
 }
 
 pub fn token_info(
     storage: &dyn Storage,
     token_id: TokenId,
-) -> Result<XRPLRemoteInterchainTokenInfo, Error> {
-    state::TOKEN_ID_TO_TOKEN_INFO
-        .may_load(storage, token_id.clone().into())
-        .change_context(Error::InvalidStoreAccess)
-        .transpose()
-        .unwrap_or(Err(report!(Error::TokenNotFound(token_id)))
-    )
-}
-
-fn try_load_msg(storage: &dyn Storage, id: CrossChainId) -> Result<Message, Error> {
-    state::OUTGOING_MESSAGES
-        .may_load(storage, &id)
-        .change_context(Error::InvalidStoreAccess)
-        .transpose()
-        .unwrap_or(Err(report!(Error::MessageNotFound(id))))
+) -> Result<Binary, state::Error> {
+    let token_info = state::load_token_info(storage, token_id)?;
+    Ok(to_json_binary(&token_info).map_err(state::Error::from)?)
 }
 
 fn accumulate_errs(
-    acc: Result<Vec<Message>, Error>,
-    msg: Result<Message, Error>,
-) -> Result<Vec<Message>, Error> {
+    acc: Result<Vec<Message>, state::Error>,
+    msg: std::result::Result<Message, state::Error>,
+) -> Result<Vec<Message>, state::Error> {
     match (acc, msg) {
         (Ok(mut acc), Ok(msg)) => {
             acc.push(msg);
             Ok(acc)
         }
-        (Err(acc), Ok(_)) => Err(acc),
-        (acc, Err(msg_err)) => extend_err(acc, msg_err),
+        (Err(report), Ok(_)) => Err(report),
+        (acc, Err(msg_err)) => extend_err(acc, msg_err.into()),
     }
 }
 
 #[cfg(test)]
 mod test {
+    use cosmwasm_std::from_json;
     use cosmwasm_std::testing::mock_dependencies;
     use router_api::{CrossChainId, Message};
 
@@ -66,15 +54,14 @@ mod test {
         let messages = generate_messages();
 
         for message in messages.iter() {
-            state::OUTGOING_MESSAGES
-                .save(deps.as_mut().storage, &message.cc_id, message)
-                .unwrap();
+            state::save_outgoing_message(deps.as_mut().storage, &message.cc_id, message).unwrap();
         }
 
-        let ids = messages.iter().map(|msg| msg.cc_id.clone()).collect();
+        let ids = messages.iter().map(|msg| &msg.cc_id);
 
         let res = super::outgoing_messages(&deps.storage, ids).unwrap();
-        assert_eq!(res, messages);
+        let actual_messages: Vec<Message> = from_json(res).unwrap();
+        assert_eq!(actual_messages, messages);
     }
 
     #[test]
@@ -82,7 +69,7 @@ mod test {
         let deps = mock_dependencies();
 
         let messages = generate_messages();
-        let ids = messages.iter().map(|msg| msg.cc_id.clone()).collect();
+        let ids = messages.iter().map(|msg| &msg.cc_id);
 
         let res = super::outgoing_messages(&deps.storage, ids);
 
@@ -96,11 +83,10 @@ mod test {
 
         let messages = generate_messages();
 
-        state::OUTGOING_MESSAGES
-            .save(deps.as_mut().storage, &messages[1].cc_id, &messages[1])
+        state::save_outgoing_message(deps.as_mut().storage, &messages[1].cc_id, &messages[1])
             .unwrap();
 
-        let ids = messages.iter().map(|msg| msg.cc_id.clone()).collect();
+        let ids = messages.iter().map(|msg| &msg.cc_id);
 
         let res = super::outgoing_messages(&deps.storage, ids);
 

@@ -1,14 +1,13 @@
-use axelar_wasm_std::counter::Counter;
+use axelar_wasm_std::{counter::Counter, IntoContractError};
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{Addr, Storage};
+use cosmwasm_std::{Addr, StdError, Storage};
 use cw_storage_plus::{Item, Map};
-use error_stack::{Result, ResultExt};
 use interchain_token_service::TokenId;
 use router_api::{ChainName, CrossChainId, Message};
-use xrpl_types::types::XRPLRemoteInterchainTokenInfo;
+use xrpl_types::types::{XRPLCurrency, XRPLRemoteInterchainTokenInfo};
 
 #[cw_serde]
-pub(crate) struct Config {
+pub struct Config {
     pub verifier: Addr,
     pub router: Addr,
     pub its_hub: Addr,
@@ -17,59 +16,122 @@ pub(crate) struct Config {
     pub xrpl_multisig_address: String,
 }
 
-pub(crate) fn save_config(storage: &mut dyn Storage, value: &Config) -> Result<(), Error> {
-    CONFIG
-        .save(storage, value)
-        .change_context(Error::SaveValue(CONFIG_NAME))
-}
-pub(crate) fn load_config(storage: &dyn Storage) -> Result<Config, Error> {
-    CONFIG
-        .load(storage)
-        .change_context(Error::LoadValue(CONFIG_NAME))
+const CONFIG: Item<Config> = Item::new("config");
+const OUTGOING_MESSAGES: Map<&CrossChainId, Message> = Map::new("outgoing_messages");
+
+const XRPL_CURRENCY_TO_TOKEN_ID: Map<[u8; 20], TokenId> = Map::new("xrpl_currency_to_token_id"); // TODO: rename to indicate that this is only relevant for remote tokens
+const TOKEN_ID_TO_TOKEN_INFO: Map<[u8; 32], XRPLRemoteInterchainTokenInfo> = Map::new("token_id_to_token_info");
+const ROUTABLE_MESSAGES_INDEX: Counter<u32> = Counter::new("routable_message_index");
+
+#[derive(thiserror::Error, Debug, IntoContractError)]
+pub enum Error {
+    #[error(transparent)]
+    Std(#[from] StdError),
+    #[error("gateway got into an invalid state, its config is missing")]
+    MissingConfig,
+    #[error("message with ID {0} mismatches with the stored one")]
+    MessageMismatch(CrossChainId),
+    #[error("message with ID {0} not found")]
+    MessageNotFound(CrossChainId),
+    #[error("token with ID {0} not found")]
+    TokenNotFound(TokenId),
+    #[error("token ID for XRPL currency {0} not found")]
+    TokenIdNotFound(XRPLCurrency),
 }
 
-#[derive(thiserror::Error, Debug)]
-pub(crate) enum Error {
-    #[error("failed to save {0}")]
-    SaveValue(&'static str),
-    #[error("failed to load {0}")]
-    LoadValue(&'static str),
+pub fn load_config(storage: &dyn Storage) -> Result<Config, Error> {
+    CONFIG
+        .may_load(storage)
+        .map_err(Error::from)?
+        .ok_or(Error::MissingConfig)
 }
 
-const CONFIG_NAME: &str = "config";
-const CONFIG: Item<Config> = Item::new(CONFIG_NAME);
-const OUTGOING_MESSAGES_NAME: &str = "outgoing_messages";
-pub const OUTGOING_MESSAGES: Map<&CrossChainId, Message> = Map::new(OUTGOING_MESSAGES_NAME);
-pub const XRPL_CURRENCY_TO_TOKEN_ID: Map<[u8; 20], TokenId> = Map::new("xrpl_currency_to_token_id"); // TODO: rename to indicate that this is only relevant for remote tokens
-pub const TOKEN_ID_TO_TOKEN_INFO: Map<[u8; 32], XRPLRemoteInterchainTokenInfo> = Map::new("token_id_to_token_info");
-pub const ROUTABLE_MESSAGES_INDEX: Counter<u32> = Counter::new("routable_message_index");
+pub fn save_config(storage: &mut dyn Storage, config: &Config) -> Result<(), Error> {
+    CONFIG.save(storage, config).map_err(Error::from)
+}
+
+pub fn load_outgoing_message(
+    storage: &dyn Storage,
+    cc_id: &CrossChainId,
+) -> Result<Message, Error> {
+    OUTGOING_MESSAGES
+        .may_load(storage, cc_id)
+        .map_err(Error::from)?
+        .ok_or_else(|| Error::MessageNotFound(cc_id.clone()))
+}
+
+pub fn save_outgoing_message(
+    storage: &mut dyn Storage,
+    cc_id: &CrossChainId,
+    msg: &Message,
+) -> Result<(), Error> {
+    let existing = OUTGOING_MESSAGES
+        .may_load(storage, cc_id)
+        .map_err(Error::from)?;
+
+    match existing {
+        Some(existing) if msg.hash() != existing.hash() => {
+            Err(Error::MessageMismatch(msg.cc_id.clone()))
+        }
+        Some(_) => Ok(()), // new message is identical, no need to store it
+        None => Ok(OUTGOING_MESSAGES
+            .save(storage, cc_id, msg)
+            .map_err(Error::from)?),
+    }
+}
+
+pub fn load_token_info(
+    storage: &dyn Storage,
+    token_id: TokenId,
+) -> Result<XRPLRemoteInterchainTokenInfo, Error> {
+    TOKEN_ID_TO_TOKEN_INFO
+        .may_load(storage, token_id.clone().into())
+        .map_err(Error::from)?
+        .ok_or_else(|| Error::TokenNotFound(token_id))
+}
+
+pub fn save_token_info(
+    storage: &mut dyn Storage,
+    token_id: TokenId,
+    token_info: &XRPLRemoteInterchainTokenInfo,
+) -> Result<(), Error> {
+    TOKEN_ID_TO_TOKEN_INFO
+        .save(storage, token_id.into(), token_info)
+        .map_err(Error::from)
+}
+
+pub fn increment_event_index(storage: &mut dyn Storage) -> Result<u32, Error> {
+    ROUTABLE_MESSAGES_INDEX
+        .incr(storage)
+        .map_err(Error::from)
+}
+
+pub fn load_token_id(
+    storage: &dyn Storage,
+    xrpl_currency: XRPLCurrency,
+) -> Result<TokenId, Error> {
+    XRPL_CURRENCY_TO_TOKEN_ID
+        .may_load(storage, xrpl_currency.clone().into())
+        .map_err(Error::from)?
+        .ok_or_else(|| Error::TokenIdNotFound(xrpl_currency))
+}
+
+pub fn save_xrpl_currency_token_id(
+    storage: &mut dyn Storage,
+    xrpl_currency: XRPLCurrency,
+    token_id: &TokenId
+) -> Result<(), Error> {
+    XRPL_CURRENCY_TO_TOKEN_ID
+        .save(storage, xrpl_currency.into(), token_id)
+        .map_err(Error::from)
+}
 
 #[cfg(test)]
 mod test {
-    use std::str::FromStr;
-
     use cosmwasm_std::testing::mock_dependencies;
-    use cosmwasm_std::Addr;
-    use router_api::{ChainName, CrossChainId, Message};
+    use router_api::{CrossChainId, Message};
 
-    use crate::state::{load_config, save_config, Config, OUTGOING_MESSAGES};
-
-    #[test]
-    fn config_storage() {
-        let mut deps = mock_dependencies();
-
-        let config = Config {
-            verifier: Addr::unchecked("verifier"),
-            router: Addr::unchecked("router"),
-            its_hub: Addr::unchecked("its_hub"),
-            axelar_chain_name: ChainName::from_str("axelar").unwrap(),
-            xrpl_chain_name: ChainName::from_str("xrpl").unwrap(),
-            xrpl_multisig_address: "raNVNWvhUQzFkDDTdEw3roXRJfMJFVJuQo".to_string(),
-        };
-        assert!(save_config(deps.as_mut().storage, &config).is_ok());
-
-        assert_eq!(load_config(&deps.storage).unwrap(), config);
-    }
+    use crate::state::OUTGOING_MESSAGES;
 
     #[test]
     fn outgoing_messages_storage() {

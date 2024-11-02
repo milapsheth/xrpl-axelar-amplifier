@@ -114,7 +114,6 @@ pub fn route_messages(app: &mut AxelarApp, gateway: &GatewayContract, msgs: &[Me
         Addr::unchecked("relayer"),
         &gateway_api::msg::ExecuteMsg::RouteMessages(msgs.to_vec()),
     );
-    println!("route_messages response: {:?}", response);
     assert!(response.is_ok());
 }
 
@@ -374,7 +373,6 @@ pub fn construct_xrpl_payment_proof_and_sign(
             payload,
         },
     );
-    println!("{:?}", response);
     assert!(response.is_ok());
     let response = response.unwrap();
 
@@ -451,7 +449,6 @@ pub fn messages_from_gateway(
         app,
         &gateway_api::msg::QueryMsg::OutgoingMessages(message_ids.to_owned()),
     );
-    println!("{:?}", query_response);
     assert!(query_response.is_ok());
 
     query_response.unwrap()
@@ -529,7 +526,6 @@ pub fn route_axelarnet_gateway_messages(
         Addr::unchecked("relayer"),
         &axelarnet_gateway::msg::ExecuteMsg::RouteMessages(messages),
     );
-    println!("route axealrnet gateway messages response: {:?}", response);
     assert!(response.is_ok());
 }
 
@@ -559,7 +555,6 @@ pub fn messages_from_xrpl_gateway(
         app,
         &xrpl_gateway::msg::QueryMsg::OutgoingMessages(message_ids.to_owned()),
     );
-    println!("{:?}", query_response);
     assert!(query_response.is_ok());
 
     query_response.unwrap()
@@ -1136,7 +1131,6 @@ pub fn setup_chain(protocol: &mut Protocol, chain_name: ChainName) -> Chain {
             msg_id_format: axelar_wasm_std::msg_id::MessageIdFormat::HexTxHashAndEventIndex,
         },
     );
-    println!("res: {:?}", response);
     assert!(response.is_ok());
 
     let rewards_params = rewards::msg::Params {
