@@ -280,6 +280,7 @@ pub struct XRPLPaymentTx {
     pub sequence: XRPLSequence,
     pub amount: XRPLPaymentAmount,
     pub destination: XRPLAccountId,
+    pub cross_currency: Option<XRPLCrossCurrencyOptions>,
 }
 
 #[cw_serde]
@@ -569,6 +570,31 @@ impl TryFrom<String> for XRPLTokenAmount {
 
         Ok(XRPLTokenAmount::new(mantissa, exponent))
     }
+}
+
+#[cw_serde]
+pub struct XRPLCrossCurrencyOptions {
+    pub send_max: XRPLPaymentAmount,
+    pub paths: Option<XRPLPathSet>,
+}
+
+#[cw_serde]
+pub struct XRPLPathSet {
+    pub paths: Vec<XRPLPath>,
+}
+
+#[cw_serde]
+pub struct XRPLPath {
+    pub steps: Vec<XRPLPathStep>,
+}
+
+#[cw_serde]
+pub enum XRPLPathStep {
+    Account(XRPLAccountId),
+    Currency(XRPLCurrency),
+    XRP,
+    Issuer(XRPLAccountId),
+    Token(XRPLToken),
 }
 
 // always called when XRPLTokenAmount instantiated

@@ -261,6 +261,7 @@ fn construct_payment_proof(
                         XRPLAccountId::from_bytes(destination_bytes), // TODO
                         &xrpl_payment_amount,
                         &message_id,
+                        None // TODO: how cross-currency payments are specified
                     )?;
 
                     let cur_verifier_set_id = match CURRENT_VERIFIER_SET.may_load(storage)? {
