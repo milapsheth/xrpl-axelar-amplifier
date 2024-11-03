@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::hash::Hash;
 
 use axelar_wasm_std::msg_id::HexTxHashAndEventIndex;
 use axelar_wasm_std::{nonempty, FnExt, VerificationStatus};
@@ -23,9 +24,9 @@ pub fn verify_messages(
     verifier: &xrpl_voting_verifier::Client,
     msgs: Vec<XRPLMessage>,
 ) -> Result<Response, Error> {
-    apply(verifier, msgs, |msgs_by_status| {
-        verify(verifier, msgs_by_status)
-    })
+    let msgs_by_status = group_by_status(verifier, msgs)?;
+    let (msgs, events) = verify(verifier, msgs_by_status);
+    Ok(Response::new().add_messages(msgs).add_events(events))
 }
 
 pub fn route_incoming_messages(
@@ -37,21 +38,31 @@ pub fn route_incoming_messages(
     axelar_chain_name: &ChainName,
     xrpl_multisig_address: &String,
 ) -> Result<Response, Error> {
-    let msg_id_to_payload: HashMap<CrossChainId, Option<nonempty::HexBinary>> = msgs.iter().map(|msg| (msg.message.cc_id(), msg.payload.clone())).collect();
-    apply(verifier, msgs.into_iter().map(|m| XRPLMessage::UserMessage(m.message)).collect(), |msgs_by_status| {
-        let msgs_by_status = msgs_by_status.into_iter().map(|(status, msgs)| {
-            let payloads: Vec<Option<nonempty::HexBinary>> = msgs.iter().map(|msg| msg_id_to_payload.get(&msg.cc_id()).unwrap().clone()).collect();
-            (status, msgs.into_iter().zip(payloads).map(|(msg, payload)| {
-                if let XRPLMessage::UserMessage(msg) = msg {
-                    XRPLMessageWithPayload { message: msg, payload }
-                } else {
-                    unreachable!()
-                }
-            }).collect())
-        }).collect();
-        route(store, router, msgs_by_status, its_hub, axelar_chain_name, xrpl_multisig_address)
-    })
+    let msgs_by_status = group_by_status(verifier, msgs)?;
+
+    let (msgs, events) = route(store, router, msgs_by_status, its_hub, axelar_chain_name, xrpl_multisig_address);
+
+    Ok(Response::new().add_messages(msgs).add_events(events))
 }
+
+pub fn group_by_status<T>(verifier: &xrpl_voting_verifier::Client, msgs: Vec<T>) -> Result<Vec<(VerificationStatus, Vec<T>)>, Error>
+where T: Into<XRPLMessage> + CrossChainMessage + Clone {
+    let msgs = check_for_duplicates(msgs)?;
+    let msgs_status = fetch_msgs_status(verifier, msgs)?;
+    let msgs_by_status = group_by_first(msgs_status);
+    Ok(msgs_by_status)
+}
+
+
+pub fn fetch_msgs_status<T: Into<XRPLMessage> + Clone>(verifier: &xrpl_voting_verifier::Client, msgs: Vec<T>) -> Result<Vec<(VerificationStatus, T)>, Error> {
+    Ok(verifier.messages_status(msgs.clone().into_iter().map(|m| m.into()).collect())
+    .change_context(Error::MessageStatus)?
+    .into_iter()
+    .zip(msgs)
+    .map(|(msg_status, msg)| (msg_status.status, msg))
+    .collect::<Vec<_>>())
+}
+
 
 // because the messages came from the router, we can assume they are already verified
 pub fn route_outgoing_messages(
@@ -204,20 +215,6 @@ fn generate_cross_chain_id(
     CrossChainId::new(chain_name, message_id).change_context(Error::InvalidCrossChainId)
 }
 
-fn apply(
-    verifier: &xrpl_voting_verifier::Client,
-    msgs: Vec<XRPLMessage>,
-    action: impl Fn(Vec<(VerificationStatus, Vec<XRPLMessage>)>) -> (Option<CosmosMsg>, Vec<Event>),
-) -> Result<Response, Error> {
-    check_for_duplicates(msgs)?
-        .then(|msgs| verifier.messages_status(msgs.into_iter().map(|m| m.into()).collect()))
-        .change_context(Error::MessageStatus)?
-        .then(group_by_status)
-        .then(action)
-        .then(|(msgs, events)| Response::new().add_messages(msgs).add_events(events))
-        .then(Ok)
-}
-
 fn check_for_duplicates<T: CrossChainMessage>(msgs: Vec<T>) -> Result<Vec<T>, Error> {
     let duplicates: Vec<_> = msgs
         .iter()
@@ -233,12 +230,11 @@ fn check_for_duplicates<T: CrossChainMessage>(msgs: Vec<T>) -> Result<Vec<T>, Er
     Ok(msgs)
 }
 
-fn group_by_status(
-    msgs_with_status: impl IntoIterator<Item = MessageStatus>,
-) -> Vec<(VerificationStatus, Vec<XRPLMessage>)> {
+fn group_by_first<K, V>(msgs_with_status: impl IntoIterator<Item = (K, V)>) -> Vec<(K, Vec<V>)>
+where K: Hash + Eq + Ord + Copy {
     msgs_with_status
         .into_iter()
-        .map(|msg_status| (msg_status.status, msg_status.message))
+        .map(|(status, msg)| (status, msg))
         .into_group_map()
         .into_iter()
         // sort by verification status so the order of messages is deterministic

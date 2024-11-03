@@ -175,6 +175,12 @@ impl CrossChainMessage for XRPLMessage {
     }
 }
 
+impl From<XRPLMessageWithPayload> for XRPLMessage {
+    fn from(other: XRPLMessageWithPayload) -> Self {
+        XRPLMessage::UserMessage(other.message)
+    }
+}
+
 impl CrossChainMessage for UserMessage {
     fn cc_id(&self) -> CrossChainId {
         CrossChainId {
