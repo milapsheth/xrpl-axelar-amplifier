@@ -111,6 +111,9 @@ pub enum ContractError {
     #[error("payment already has active signing session with ID {0}")]
     PaymentAlreadyHasActiveSigningSession(u64),
 
+    #[error("payment already has completed signing session with ID {0}")]
+    PaymentAlreadyHasCompletedSigningSession(u64),
+
     #[error("invalid token denomination")]
     InvalidTokenDenom,
 

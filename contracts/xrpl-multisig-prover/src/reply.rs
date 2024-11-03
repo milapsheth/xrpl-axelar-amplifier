@@ -6,8 +6,7 @@ use crate::{
     error::ContractError,
     events::Event,
     state::{
-        MESSAGE_ID_TO_MULTISIG_SESSION_ID, MULTISIG_SESSION_ID_TO_TX_HASH, REPLY_MESSAGE_ID,
-        REPLY_TX_HASH, TRANSACTION_INFO,
+        MultisigSession, MESSAGE_ID_TO_MULTISIG_SESSION, MULTISIG_SESSION_ID_TO_TX_HASH, REPLY_MESSAGE_ID, REPLY_TX_HASH, TRANSACTION_INFO
     },
     xrpl_serialize::XRPLSerialize,
 };
@@ -30,12 +29,34 @@ pub fn start_multisig_reply(deps: DepsMut, reply: Reply) -> Result<Response, Con
 
             let tx_info = TRANSACTION_INFO.load(deps.storage, &tx_hash)?;
 
+            let res = reply.result.unwrap();
+
+            let signing_started_attributes: Vec<_> = res
+                .events
+                .into_iter()
+                .filter(|e| e.ty == "wasm-signing_started")
+                .flat_map(|e| e.attributes)
+                .collect();
+
+            let expires_at: u64 = signing_started_attributes
+                .clone()
+                .into_iter()
+                .filter(|a| a.key.eq("expires_at"))
+                .next()
+                .expect("violated invariant: wasm-signing_started event missing expires_at")
+                .value
+                .parse()
+                .expect("violated invariant: expires_at is not a number");
+
             match REPLY_MESSAGE_ID.may_load(deps.storage)? {
                 Some(message_id) => {
-                    MESSAGE_ID_TO_MULTISIG_SESSION_ID.save(
+                    MESSAGE_ID_TO_MULTISIG_SESSION.save(
                         deps.storage,
                         &message_id,
-                        &multisig_session_id.u64(),
+                        &MultisigSession {
+                            id: multisig_session_id.u64(),
+                            expires_at,
+                        },
                     )?;
                     REPLY_MESSAGE_ID.remove(deps.storage);
                 }
@@ -45,13 +66,8 @@ pub fn start_multisig_reply(deps: DepsMut, reply: Reply) -> Result<Response, Con
                 None => (),
             }
 
-            let res = reply.result.unwrap();
-
-            let evt_attributes: Vec<Attribute> = res
-                .events
+            let evt_attributes: Vec<Attribute> = signing_started_attributes
                 .into_iter()
-                .filter(|e| e.ty == "wasm-signing_started")
-                .flat_map(|e| e.attributes)
                 .filter(|a| !a.key.starts_with('_') && a.key != "msg")
                 .collect();
 

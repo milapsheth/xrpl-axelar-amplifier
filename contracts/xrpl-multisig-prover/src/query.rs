@@ -5,7 +5,7 @@ use multisig::key::PublicKey;
 use multisig::{key::Signature, types::MultisigState};
 use xrpl_types::error::XRPLError;
 
-use crate::state::{AVAILABLE_TICKETS, MESSAGE_ID_TO_MULTISIG_SESSION_ID, MESSAGE_ID_TO_TICKET};
+use crate::state::{MultisigSession, AVAILABLE_TICKETS, MESSAGE_ID_TO_MULTISIG_SESSION, MESSAGE_ID_TO_TICKET};
 use crate::{
     error::ContractError,
     msg::ProofResponse,
@@ -88,10 +88,10 @@ pub fn get_verifier_set(storage: &dyn Storage) -> StdResult<multisig::verifier_s
     Ok(CURRENT_VERIFIER_SET.load(storage)?.into())
 }
 
-pub fn get_multisig_session_id(
+pub fn get_multisig_session(
     storage: &dyn Storage,
     message_id: &CrossChainId,
-) -> StdResult<Option<u64>> {
+) -> StdResult<Option<MultisigSession>> {
     let existing_ticket_number = MESSAGE_ID_TO_TICKET.may_load(storage, message_id)?;
     let available_tickets = AVAILABLE_TICKETS.may_load(storage)?;
     if existing_ticket_number.is_none() || available_tickets.is_none() {
@@ -102,7 +102,7 @@ pub fn get_multisig_session_id(
         .unwrap()
         .contains(&existing_ticket_number.unwrap())
     {
-        return MESSAGE_ID_TO_MULTISIG_SESSION_ID.may_load(storage, message_id);
+        return MESSAGE_ID_TO_MULTISIG_SESSION.may_load(storage, message_id);
     }
 
     Ok(None)

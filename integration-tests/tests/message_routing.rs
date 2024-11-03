@@ -270,17 +270,19 @@ fn payment_from_xrpl_can_be_verified_and_routed_and_proven() {
     let amount = XRPLPaymentAmount::Drops(1000000); // 1 XRP
     let payload: Option<nonempty::HexBinary> = None;
 
-    let xrpl_msg = XRPLMessage::UserMessage(UserMessage {
+    let xrpl_user_msg = UserMessage {
         tx_id: [0; 32], // TODO
         source_address: source_address.clone(),
         destination_chain: destination_chain_name.clone(),
         destination_address: destination_address.clone(),
         payload_hash: [0; 32],
         amount,
-    });
+    };
+
+    let xrpl_msg = XRPLMessage::UserMessage(xrpl_user_msg.clone());
 
     let xrpl_msg_with_payload = XRPLMessageWithPayload {
-        message: xrpl_msg.clone(),
+        message: xrpl_user_msg,
         payload: payload.clone(),
     };
 

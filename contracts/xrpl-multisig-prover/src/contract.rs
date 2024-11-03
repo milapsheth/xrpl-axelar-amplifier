@@ -24,7 +24,7 @@ use crate::{
     query, reply,
     state::{
         Config, AVAILABLE_TICKETS, CONFIG, CURRENT_VERIFIER_SET, LAST_ASSIGNED_TICKET_NUMBER,
-        MESSAGE_ID_TO_MULTISIG_SESSION_ID, MULTISIG_SESSION_ID_TO_TX_HASH, NEXT_SEQUENCE_NUMBER,
+        MESSAGE_ID_TO_MULTISIG_SESSION, MULTISIG_SESSION_ID_TO_TX_HASH, NEXT_SEQUENCE_NUMBER,
         NEXT_VERIFIER_SET, REPLY_MESSAGE_ID, REPLY_TX_HASH, TRANSACTION_INFO,
     },
     types::*,
@@ -61,9 +61,6 @@ pub fn instantiate(
 
     Ok(Response::default())
 }
-
-// TODO: STOP USING LAST SEQUENTIAL TX
-// store last verifier set tx, keep it up to date, if competing tx is confirmed, mark it as rejected
 
 fn make_config(
     deps: &DepsMut,
@@ -213,17 +210,22 @@ fn construct_payment_proof(
     payload: HexBinary,
 ) -> Result<Response, ContractError> {
     // Prevent creating a duplicate signing session before the previous one expires
-    if let Some(multisig_session_id) =
-        MESSAGE_ID_TO_MULTISIG_SESSION_ID.may_load(storage, &message_id)?
+    if let Some(multisig_session) =
+        MESSAGE_ID_TO_MULTISIG_SESSION.may_load(storage, &message_id)?
     {
-        let multisig_session = querier.get_multisig_session(&Uint64::from(multisig_session_id))?;
-        if multisig_session.state == MultisigState::Pending
-            // TODO: AND MULTISIG SESSION HAS EXPIRED
-            // && multisig_session.expires_at <= block_height
-        {
-            return Err(ContractError::PaymentAlreadyHasActiveSigningSession(
-                multisig_session_id,
-            ));
+        match querier.get_multisig_session(&Uint64::from(multisig_session.id))?.state {
+            MultisigState::Pending => {
+                if multisig_session.expires_at <= block_height {
+                    return Err(ContractError::PaymentAlreadyHasActiveSigningSession(
+                        multisig_session.id,
+                    ));
+                }
+            }
+            MultisigState::Completed { .. } => {
+                return Err(ContractError::PaymentAlreadyHasCompletedSigningSession(
+                    multisig_session.id
+                ));
+            }
         }
     };
 
@@ -240,6 +242,7 @@ fn construct_payment_proof(
         },
         its::HubMessage::ReceiveFromHub { source_chain, message } => {
             match message {
+                // TODO: validate source_address?
                 interchain_token_service::Message::InterchainTransfer { token_id, source_address, destination_address, amount, data } => {
                     let xrpl_payment_amount = if token_id == XRPLTokenOrXRP::XRP.token_id() { // TODO: don't compute XRP_TOKEN_ID every time
                         let drops = if ChainNameRaw::from_str("xrpl-evm-sidechain").unwrap() == source_chain { // TODO: create XRPL_EVM_SIDECHAIN_NAME const
@@ -258,7 +261,7 @@ fn construct_payment_proof(
                     let tx_hash = xrpl_multisig::issue_payment(
                         storage,
                         config,
-                        XRPLAccountId::from_bytes(destination_bytes), // TODO
+                        XRPLAccountId::from_bytes(destination_bytes),
                         &xrpl_payment_amount,
                         &message_id,
                         None // TODO: how cross-currency payments are specified
@@ -275,8 +278,7 @@ fn construct_payment_proof(
                     Ok(Response::new().add_submessage(start_signing_session(storage, config, tx_hash, self_address, cur_verifier_set_id)?))
                 },
                 interchain_token_service::Message::DeployInterchainToken { .. } => {
-                    // TODO: emit event with params
-                    Ok(Response::new())
+                    Err(ContractError::InvalidPayload)
                 },
                 interchain_token_service::Message::DeployTokenManager { .. } => {
                     Err(ContractError::InvalidPayload)
@@ -580,8 +582,8 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
                 .map_err(|_| ContractError::InvalidSignature)?,
         )?),
         QueryMsg::VerifierSet {} => to_json_binary(&query::get_verifier_set(deps.storage)?),
-        QueryMsg::MultisigSessionId { message_id } => {
-            to_json_binary(&query::get_multisig_session_id(deps.storage, &message_id)?)
+        QueryMsg::MultisigSession { message_id } => {
+            to_json_binary(&query::get_multisig_session(deps.storage, &message_id)?)
         } // TODO: rename
     }
 }

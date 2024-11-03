@@ -38,10 +38,16 @@ pub fn route_incoming_messages(
     xrpl_multisig_address: &String,
 ) -> Result<Response, Error> {
     let msg_id_to_payload: HashMap<CrossChainId, Option<nonempty::HexBinary>> = msgs.iter().map(|msg| (msg.message.cc_id(), msg.payload.clone())).collect();
-    apply(verifier, msgs.into_iter().map(|m| m.message).collect(), |msgs_by_status| {
+    apply(verifier, msgs.into_iter().map(|m| XRPLMessage::UserMessage(m.message)).collect(), |msgs_by_status| {
         let msgs_by_status = msgs_by_status.into_iter().map(|(status, msgs)| {
             let payloads: Vec<Option<nonempty::HexBinary>> = msgs.iter().map(|msg| msg_id_to_payload.get(&msg.cc_id()).unwrap().clone()).collect();
-            (status, msgs.into_iter().zip(payloads).map(|(msg, payload)| XRPLMessageWithPayload { message: msg, payload }).collect())
+            (status, msgs.into_iter().zip(payloads).map(|(msg, payload)| {
+                if let XRPLMessage::UserMessage(msg) = msg {
+                    XRPLMessageWithPayload { message: msg, payload }
+                } else {
+                    unreachable!()
+                }
+            }).collect())
         }).collect();
         route(store, router, msgs_by_status, its_hub, axelar_chain_name, xrpl_multisig_address)
     })
@@ -267,7 +273,7 @@ fn route(
     msgs_by_status
         .into_iter()
         .map(|(status, msgs)| {
-            let msgs: Vec<Message> = msgs.iter().map(|m| to_its_message(store, m.clone(), its_hub, axelar_chain_name, xrpl_multisig_address)).collect();
+            let msgs: Vec<Message> = msgs.iter().map(|m| to_its_message(store, &m, its_hub, axelar_chain_name, xrpl_multisig_address)).collect();
             (
                 filter_routable_messages(status, &msgs),
                 into_route_events(status, msgs),
@@ -346,56 +352,52 @@ fn scale_up_drops(drops: u64, to_decimals: u8) -> Uint256 {
 
 fn to_its_message(
     store: &dyn Storage,
-    msg: XRPLMessageWithPayload,
+    msg_with_payload: &XRPLMessageWithPayload,
     its_hub: &Addr,
     axelar_chain_name: &ChainName,
     xrpl_multisig_address: &String,
 ) -> Message {
-    match msg.message.clone() {
-        XRPLMessage::ProverMessage(tx_hash) => todo!(),
-        XRPLMessage::UserMessage(user_message) => {
-            let token_id: its::TokenId = match user_message.amount.clone() {
-                XRPLPaymentAmount::Drops(_) => XRPLTokenOrXRP::XRP.token_id(),
-                XRPLPaymentAmount::Token(token, _) => {
-                    if token.issuer == XRPLAccountId::from_str(xrpl_multisig_address).unwrap() {
-                        state::load_token_id(store, token.currency).unwrap() // TODO: handle error - function should return Result
-                    } else {
-                        XRPLTokenOrXRP::Token(token).token_id()
-                    }
-                }
-            };
-
-            // TODO: check that msg.payload matches user_message.payload_hash
-            let interchain_transfer = its::Message::InterchainTransfer {
-                token_id,
-                source_address: nonempty::HexBinary::try_from(HexBinary::from(&user_message.source_address.to_bytes())).unwrap(),
-                destination_address: user_message.destination_address,
-                amount: nonempty::Uint256::try_from(match user_message.amount {
-                    XRPLPaymentAmount::Drops(drops) => if user_message.destination_chain == ChainName::from_str("xrpl-evm-sidechain").unwrap() { // TODO: create XRPL_EVM_SIDECHAIN_NAME const
-                        scale_up_drops(drops, 18u8)
-                    } else {
-                        Uint256::from(drops)
-                    },
-                    XRPLPaymentAmount::Token(_, token_amount) => Uint256::from(u64::from_be_bytes(token_amount.to_bytes())),
-                }).unwrap(),
-                data: msg.payload,
-            };
-
-            let its_msg = its::HubMessage::SendToHub {
-                destination_chain: user_message.destination_chain.into(),
-                message: interchain_transfer,
-            };
-
-            let payload = its_msg.abi_encode();
-
-            Message {
-                cc_id: msg.message.cc_id(),
-                source_address: Address::from_str(xrpl_multisig_address).unwrap(),
-                destination_address: Address::from_str(its_hub.as_str()).unwrap(),
-                destination_chain: axelar_chain_name.clone(),
-                payload_hash: Keccak256::digest(payload.as_slice()).into(),
+    let user_message = &msg_with_payload.message;
+    let token_id: its::TokenId = match user_message.amount.clone() {
+        XRPLPaymentAmount::Drops(_) => XRPLTokenOrXRP::XRP.token_id(),
+        XRPLPaymentAmount::Token(token, _) => {
+            if token.issuer == XRPLAccountId::from_str(xrpl_multisig_address).unwrap() {
+                state::load_token_id(store, token.currency).unwrap() // TODO: handle error - function should return Result
+            } else {
+                XRPLTokenOrXRP::Token(token).token_id()
             }
-        },
+        }
+    };
+
+    // TODO: check that msg.payload matches user_message.payload_hash
+    let interchain_transfer = its::Message::InterchainTransfer {
+        token_id,
+        source_address: nonempty::HexBinary::try_from(HexBinary::from(&user_message.source_address.to_bytes())).unwrap(),
+        destination_address: user_message.clone().destination_address,
+        amount: nonempty::Uint256::try_from(match user_message.clone().amount {
+            XRPLPaymentAmount::Drops(drops) => if user_message.destination_chain == ChainName::from_str("xrpl-evm-sidechain").unwrap() { // TODO: create XRPL_EVM_SIDECHAIN_NAME const
+                scale_up_drops(drops, 18u8)
+            } else {
+                Uint256::from(drops)
+            },
+            XRPLPaymentAmount::Token(_, token_amount) => Uint256::from(u64::from_be_bytes(token_amount.to_bytes())),
+        }).unwrap(),
+        data: msg_with_payload.payload.clone(),
+    };
+
+    let its_msg = its::HubMessage::SendToHub {
+        destination_chain: user_message.clone().destination_chain.into(),
+        message: interchain_transfer,
+    };
+
+    let payload = its_msg.abi_encode();
+
+    Message {
+        cc_id: user_message.cc_id(),
+        source_address: Address::from_str(xrpl_multisig_address).unwrap(),
+        destination_address: Address::from_str(its_hub.as_str()).unwrap(),
+        destination_chain: axelar_chain_name.clone(),
+        payload_hash: Keccak256::digest(payload.as_slice()).into(),
     }
 }
 

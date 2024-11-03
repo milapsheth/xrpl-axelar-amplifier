@@ -19,12 +19,12 @@ pub type XRPLHash = [u8; 32];
 
 #[cw_serde]
 #[derive(Eq, Hash)]
-pub struct XRPLMessageWithPayload {
-    pub message: XRPLMessage, // TODO: Should be XRPLUserMessage
+pub struct XRPLMessageWithPayload { // TODO: rename
+    pub message: UserMessage,
     pub payload: Option<nonempty::HexBinary>,
 }
 
-impl From<XRPLMessageWithPayload> for XRPLMessage {
+impl From<XRPLMessageWithPayload> for UserMessage {
     fn from(other: XRPLMessageWithPayload) -> Self {
         other.message
     }
@@ -165,11 +165,21 @@ impl CrossChainMessage for Message {
     }
 }
 
+// TODO: redundant?
 impl CrossChainMessage for XRPLMessage {
     fn cc_id(&self) -> CrossChainId {
         CrossChainId {
             source_chain: ChainNameRaw::from_str(CHAIN_NAME).unwrap(),
             message_id: format!("0x{}", HexBinary::from(self.tx_id()).to_hex()).try_into().unwrap(),
+        }
+    }
+}
+
+impl CrossChainMessage for UserMessage {
+    fn cc_id(&self) -> CrossChainId {
+        CrossChainId {
+            source_chain: ChainNameRaw::from_str(CHAIN_NAME).unwrap(),
+            message_id: format!("0x{}", HexBinary::from(self.tx_id).to_hex()).try_into().unwrap(),
         }
     }
 }

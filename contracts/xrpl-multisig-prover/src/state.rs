@@ -39,9 +39,15 @@ pub const MULTISIG_SESSION_ID_TO_TX_HASH: Map<u64, TxHash> = Map::new("multisig_
 pub const NEXT_SEQUENCE_NUMBER: Item<u32> = Item::new("next_sequence_number");
 pub const LAST_ASSIGNED_TICKET_NUMBER: Item<u32> = Item::new("last_assigned_ticket_number");
 
+#[cw_serde]
+pub struct MultisigSession { // TODO: rename
+    pub id: u64,
+    pub expires_at: u64,
+}
+
 pub const MESSAGE_ID_TO_TICKET: Map<&CrossChainId, u32> = Map::new("message_id_to_ticket");
-pub const MESSAGE_ID_TO_MULTISIG_SESSION_ID: Map<&CrossChainId, u64> =
-    Map::new("message_id_to_multisig_session_id");
+pub const MESSAGE_ID_TO_MULTISIG_SESSION: Map<&CrossChainId, MultisigSession> =
+    Map::new("message_id_to_multisig_session");
 pub const CONFIRMED_TRANSACTIONS: Map<&u32, TxHash> = Map::new("confirmed_transactions");
 pub const AVAILABLE_TICKETS: Item<Vec<u32>> = Item::new("available_tickets");
 pub const TRANSACTION_INFO: Map<&TxHash, TransactionInfo> = Map::new("transaction_info");

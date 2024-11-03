@@ -520,9 +520,17 @@ fn generate_incoming_msgs(namespace: impl Debug, count: u8) -> Vec<XRPLMessage> 
 }
 
 fn messages_with_payload(msgs: Vec<XRPLMessage>) -> Vec<XRPLMessageWithPayload> {
-    msgs.into_iter().map(|msg| XRPLMessageWithPayload {
-        message: msg,
-        payload: Some(nonempty::HexBinary::try_from(HexBinary::from_hex("0123456789abcdef").unwrap()).unwrap()),
+    msgs.into_iter().map(|msg| {
+        let user_message = if let XRPLMessage::UserMessage(user_message) = msg {
+            user_message
+        } else {
+            panic!("only user messages are supported")
+        };
+
+        return XRPLMessageWithPayload {
+            message: user_message,
+            payload: Some(nonempty::HexBinary::try_from(HexBinary::from_hex("0123456789abcdef").unwrap()).unwrap()),
+        }
     }).collect()
 }
 

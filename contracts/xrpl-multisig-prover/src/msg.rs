@@ -6,6 +6,8 @@ use multisig::key::PublicKey;
 
 use xrpl_types::types::{TxHash, XRPLToken};
 
+use crate::state::MultisigSession;
+
 #[cw_serde]
 pub struct InstantiateMsg {
     pub admin_address: String,
@@ -45,8 +47,8 @@ pub enum QueryMsg {
     #[returns(multisig::verifier_set::VerifierSet)]
     VerifierSet,
 
-    #[returns(Option<u64>)]
-    MultisigSessionId { message_id: CrossChainId },
+    #[returns(Option<MultisigSession>)]
+    MultisigSession { message_id: CrossChainId },
 }
 
 #[cw_serde]
