@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::str::FromStr;
 use std::hash::Hash;
 
@@ -11,7 +10,6 @@ use router_api::client::Router;
 use router_api::{Address, ChainName, CrossChainId, Message};
 use sha3::{Digest, Keccak256};
 use xrpl_types::types::{XRPLAccountId, XRPLCurrency, XRPLPaymentAmount, XRPLRemoteInterchainTokenInfo, XRPLToken, XRPLTokenOrXRP};
-use xrpl_voting_verifier::msg::MessageStatus;
 use xrpl_types::msg::{CrossChainMessage, XRPLMessage, XRPLMessageWithPayload};
 use interchain_token_service::{self as its, TokenId};
 
@@ -40,7 +38,7 @@ pub fn route_incoming_messages(
 ) -> Result<Response, Error> {
     let msgs_by_status = group_by_status(verifier, msgs)?;
 
-    let (msgs, events) = route(store, router, msgs_by_status, its_hub, axelar_chain_name, xrpl_multisig_address);
+    let (msgs, events) = route(store, router, msgs_by_status, its_hub, axelar_chain_name, xrpl_multisig_address)?;
 
     Ok(Response::new().add_messages(msgs).add_events(events))
 }
@@ -265,18 +263,18 @@ fn route(
     its_hub: &Addr,
     axelar_chain_name: &ChainName,
     xrpl_multisig_address: &String,
-) -> (Option<CosmosMsg>, Vec<Event>) {
-    msgs_by_status
-        .into_iter()
-        .map(|(status, msgs)| {
-            let msgs: Vec<Message> = msgs.iter().map(|m| to_its_message(store, &m, its_hub, axelar_chain_name, xrpl_multisig_address)).collect();
-            (
-                filter_routable_messages(status, &msgs),
-                into_route_events(status, msgs),
-            )
-        })
-        .then(flat_unzip)
-        .then(|(msgs, events)| (router.route(msgs), events))
+) -> Result<(Option<CosmosMsg>, Vec<Event>), Error> {
+    let mut route_msgs = Vec::new();
+    let mut events = Vec::new();
+    for (status, msgs) in &msgs_by_status {
+        let mut its_msgs = Vec::new();
+        for msg in msgs {
+            its_msgs.push(to_its_message(store, msg, its_hub, axelar_chain_name, xrpl_multisig_address)?);
+        }
+        route_msgs.extend(filter_routable_messages(*status, &its_msgs));
+        events.extend(into_route_events(*status, its_msgs));
+    }
+    Ok((router.route(route_msgs), events))
 }
 
 // not all messages are verifiable, so it's better to only take a reference and allocate a vector on demand
@@ -352,13 +350,13 @@ fn to_its_message(
     its_hub: &Addr,
     axelar_chain_name: &ChainName,
     xrpl_multisig_address: &String,
-) -> Message {
+) -> Result<Message, Error> {
     let user_message = &msg_with_payload.message;
     let token_id: its::TokenId = match user_message.amount.clone() {
         XRPLPaymentAmount::Drops(_) => XRPLTokenOrXRP::XRP.token_id(),
         XRPLPaymentAmount::Token(token, _) => {
             if token.issuer == XRPLAccountId::from_str(xrpl_multisig_address).unwrap() {
-                state::load_token_id(store, token.currency).unwrap() // TODO: handle error - function should return Result
+                state::load_token_id(store, token.currency).map_err(|_| Error::InvalidToken)?
             } else {
                 XRPLTokenOrXRP::Token(token).token_id()
             }
@@ -368,7 +366,7 @@ fn to_its_message(
     // TODO: check that msg.payload matches user_message.payload_hash
     let interchain_transfer = its::Message::InterchainTransfer {
         token_id,
-        source_address: nonempty::HexBinary::try_from(HexBinary::from(&user_message.source_address.to_bytes())).unwrap(),
+        source_address: nonempty::HexBinary::try_from(HexBinary::from(&user_message.source_address.to_bytes())).map_err(|_| Error::InvalidAddress)?,
         destination_address: user_message.clone().destination_address,
         amount: nonempty::Uint256::try_from(match user_message.clone().amount {
             XRPLPaymentAmount::Drops(drops) => if user_message.destination_chain == ChainName::from_str("xrpl-evm-sidechain").unwrap() { // TODO: create XRPL_EVM_SIDECHAIN_NAME const
@@ -388,13 +386,13 @@ fn to_its_message(
 
     let payload = its_msg.abi_encode();
 
-    Message {
+    Ok(Message {
         cc_id: user_message.cc_id(),
         source_address: Address::from_str(xrpl_multisig_address).unwrap(),
         destination_address: Address::from_str(its_hub.as_str()).unwrap(),
         destination_chain: axelar_chain_name.clone(),
         payload_hash: Keccak256::digest(payload.as_slice()).into(),
-    }
+    })
 }
 
 #[test]

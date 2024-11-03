@@ -48,6 +48,10 @@ pub enum Error {
     TokenInfo,
     #[error("failed to verify messages")]
     VerifyMessages,
+    #[error("invalid token")]
+    InvalidToken,
+    #[error("invalid address")]
+    InvalidAddress
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
