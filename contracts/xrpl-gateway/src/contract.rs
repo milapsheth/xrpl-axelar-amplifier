@@ -291,13 +291,6 @@ pub fn execute(
                 msgs,
             )
         }
-        ExecuteMsg::OffloadDust { multisig_prover, token_id } => {
-            execute::offload_dust(
-                deps.storage,
-                multisig_prover,
-                token_id,
-            )
-        }
     }?
     .then(Ok)
 }
