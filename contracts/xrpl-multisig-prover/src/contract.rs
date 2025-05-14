@@ -133,14 +133,13 @@ pub fn execute(
             add_reserves_message,
         ),
         ExecuteMsg::VerifySignature {
-            session_id,
-            message: _,
+            session_id: _,
+            message,
             public_key,
             signature,
             signer_address: _,
         } => execute::verify_signature(
-            deps.storage,
-            &session_id,
+            message,
             &PublicKey::Ecdsa(public_key),
             &multisig::key::Signature::try_from((multisig::key::KeyType::Ecdsa, signature))
                 .map_err(|_| ContractError::InvalidSignature)?,
@@ -181,14 +180,13 @@ pub fn query(
             multisig_session_id,
         )?),
         QueryMsg::VerifySignature {
-            session_id,
-            message: _,
+            session_id: _,
+            message,
             public_key,
             signature,
             signer_address: _,
         } => to_json_binary(&query::verify_signature(
-            deps.storage,
-            &session_id,
+            message,
             &PublicKey::Ecdsa(public_key),
             &multisig::key::Signature::try_from((multisig::key::KeyType::Ecdsa, signature))
                 .map_err(|_| ContractError::InvalidSignature)?,
@@ -322,7 +320,7 @@ mod tests {
             session_id: MULTISIG_SESSION_ID,
             verifier_set_id: "".to_string(),
             pub_keys: HashMap::new(),
-            msg: HexBinary::from([0u8; 32]).try_into().unwrap(),
+            msg: HexBinary::from([0u8; 32]).into(),
             chain_name: "xrpl".parse().unwrap(),
             expires_at: 1000,
         });
@@ -416,7 +414,7 @@ mod tests {
             session_id: MULTISIG_SESSION_ID,
             verifier_set_id: "".to_string(),
             pub_keys: HashMap::new(),
-            msg: HexBinary::from([0u8; 32]).try_into().unwrap(),
+            msg: HexBinary::from([0u8; 32]).into(),
             chain_name: "xrpl".parse().unwrap(),
             expires_at: 1000,
         });
@@ -1038,12 +1036,6 @@ mod tests {
                 .clone(),
         )
         .unwrap();
-
-        let signing_started_event = res
-            .events
-            .iter()
-            .find(|event| event.ty == "xrpl_signing_started");
-        assert!(signing_started_event.is_some());
 
         let res = query_proof(deps.as_ref(), None).unwrap();
         assert_eq!(res.unsigned_tx_hash, unsigned_tx_hash);

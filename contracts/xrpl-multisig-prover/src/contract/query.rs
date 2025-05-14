@@ -4,7 +4,7 @@ use multisig::key::{PublicKey, Signature};
 use multisig::types::MultisigState;
 use router_api::CrossChainId;
 use xrpl_types::error::XRPLError;
-use xrpl_types::types::{XRPLAccountId, XRPLSignedTx, XRPLSigner, XRPLUnsignedTxToSign};
+use xrpl_types::types::{XRPLAccountId, XRPLSignedTx, XRPLSigner};
 
 use crate::error::ContractError;
 use crate::msg::{ProofResponse, ProofStatus};
@@ -15,36 +15,15 @@ use crate::state::{
 use crate::xrpl_multisig;
 use crate::xrpl_serialize::XRPLSerialize;
 
-fn message_to_sign(
-    storage: &dyn Storage,
-    multisig_session_id: &Uint64,
-    signer_xrpl_address: &XRPLAccountId,
-) -> Result<[u8; 32], ContractError> {
-    let unsigned_tx_hash =
-        MULTISIG_SESSION_ID_TO_UNSIGNED_TX_HASH.load(storage, multisig_session_id.u64())?;
-
-    let tx_info = UNSIGNED_TX_HASH_TO_TX_INFO.load(storage, &unsigned_tx_hash)?;
-
-    let encoded_unsigned_tx_to_sign = XRPLUnsignedTxToSign {
-        unsigned_tx: tx_info.unsigned_tx,
-        unsigned_tx_hash: HexTxHash::new(unsigned_tx_hash),
-        cc_id: tx_info.original_cc_id,
-    }
-    .xrpl_serialize()?;
-    Ok(xrpl_types::types::message_to_sign(
-        encoded_unsigned_tx_to_sign,
-        signer_xrpl_address,
-    )?)
-}
-
 pub fn verify_signature(
-    storage: &dyn Storage,
-    multisig_session_id: &Uint64,
+    encoded_unsigned_tx: HexBinary,
     public_key: &PublicKey,
     signature: &Signature,
 ) -> StdResult<bool> {
-    let signer_xrpl_address = XRPLAccountId::from(public_key);
-    let tx_hash = message_to_sign(storage, multisig_session_id, &signer_xrpl_address)?;
+    let signer_xrpl_address = &XRPLAccountId::from(public_key);
+    let tx_hash =
+        xrpl_types::types::message_to_sign(encoded_unsigned_tx.into(), signer_xrpl_address)?;
+
     Ok(signature
         .verify(HexBinary::from(tx_hash), public_key)
         .is_ok())
@@ -130,17 +109,20 @@ pub fn ticket_create(
 
 #[cfg(test)]
 mod test {
+    use axelar_wasm_std::msg_id::HexTxHash;
     use axelar_wasm_std::VerificationStatus;
     use cosmwasm_std::testing::{mock_dependencies, MockApi, MockQuerier};
     use cosmwasm_std::{HexBinary, MemoryStorage, OwnedDeps, QuerierWrapper, Uint64};
     use xrpl_types::types::{
         XRPLAccountId, XRPLSequence, XRPLTicketCreateTx, XRPLTxStatus, XRPLUnsignedTx,
+        XRPLUnsignedTxToSign,
     };
 
     use crate::msg::ProofStatus;
     use crate::state::{self, TxInfo};
     use crate::test::test_data::{self, new_verifier_set, new_xrpl_verifier_set};
     use crate::test::test_utils::{mock_querier_handler, MULTISIG_ADDRESS};
+    use crate::xrpl_serialize::XRPLSerialize;
 
     #[derive(Clone)]
     struct SigningSession {
@@ -218,20 +200,16 @@ mod test {
     }
 
     #[test]
-    fn message_to_sign() {
-        let signing_session = signing_session();
-        let deps = setup_deps_with_signing_session(signing_session.clone());
-        let signer = XRPLAccountId::new([123u8; 20]);
-
-        let message_to_sign =
-            super::message_to_sign(&deps.storage, &signing_session.session_id, &signer).unwrap();
-        goldie::assert!(HexBinary::from(message_to_sign).to_string());
-    }
-
-    #[test]
     fn verify_signature() {
         let signing_session = signing_session();
-        let deps = setup_deps_with_signing_session(signing_session.clone());
+
+        let unsigned_tx_to_sign = XRPLUnsignedTxToSign {
+            unsigned_tx: signing_session.tx_info.unsigned_tx.clone(),
+            unsigned_tx_hash: HexTxHash::new(signing_session.unsigned_tx_hash),
+            cc_id: signing_session.tx_info.original_cc_id,
+        };
+
+        let message: HexBinary = unsigned_tx_to_sign.xrpl_serialize().unwrap().into();
 
         let public_key = multisig::key::PublicKey::Ecdsa(
             HexBinary::from_hex(
@@ -241,13 +219,7 @@ mod test {
         );
         let signature: multisig::key::Signature = (multisig::key::KeyType::Ecdsa, HexBinary::from_hex("e0743ee9454a56d553c78697cafefce43f215cf800ae10e1d13f2e39aba48b3f16d677d1818bf6a7f4edda97a27bd5eff4fa6404a92e2c1c9053ebc93fd708e5").unwrap()).try_into().unwrap();
 
-        assert!(super::verify_signature(
-            &deps.storage,
-            &signing_session.session_id,
-            &public_key,
-            &signature
-        )
-        .unwrap());
+        assert!(super::verify_signature(message, &public_key, &signature).unwrap());
     }
 
     #[test]
