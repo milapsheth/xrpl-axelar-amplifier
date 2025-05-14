@@ -512,7 +512,7 @@ pub fn sign_xrpl_proof(
             .expect("couldn't get session_id");
 
     let unsigned_tx: HexBinary =
-        find_event_attribute(&response.events, "wasm-xrpl_signing_started", "unsigned_tx")
+        find_event_attribute(&response.events, "wasm-signing_started", "msg")
             .map(|attr| HexBinary::from_hex(attr.value.as_str()).unwrap())
             .expect("couldn't get unsigned_tx");
 

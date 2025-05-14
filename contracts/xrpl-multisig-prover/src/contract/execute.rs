@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 use std::str::FromStr;
 
-use axelar_wasm_std::msg_id::HexTxHash;
 use axelar_wasm_std::{
     address, killswitch, permission_control, FnExt, MajorityThreshold, VerificationStatus,
 };
@@ -16,7 +15,8 @@ use router_api::{ChainNameRaw, CrossChainId};
 use sha3::{Digest, Keccak256};
 use xrpl_types::msg::{XRPLAddReservesMessage, XRPLMessage, XRPLProverMessage};
 use xrpl_types::types::{
-    canonicalize_token_amount, XRPLAccountId, XRPLPaymentAmount, XRPLTxStatus, XRP_MAX_UINT,
+    canonicalize_token_amount, XRPLAccountId, XRPLPaymentAmount, XRPLTxStatus,
+    XRPLUnsignedTxToSign, XRP_MAX_UINT,
 };
 
 use super::START_MULTISIG_REPLY_ID;
@@ -24,6 +24,7 @@ use crate::contract::query;
 use crate::error::ContractError;
 use crate::events::Event;
 use crate::state::{self, Config, FEE_RESERVE, FEE_RESERVE_TOP_UP_COUNTED, TRUST_LINE};
+use crate::xrpl_serialize::XRPLSerialize;
 use crate::{axelar_verifiers, xrpl_multisig};
 
 pub fn construct_trust_set_proof(
@@ -159,12 +160,11 @@ pub fn confirm_add_reserves_message(
 }
 
 pub fn verify_signature(
-    storage: &dyn Storage,
-    session_id: &Uint64,
+    message: HexBinary,
     public_key: &PublicKey,
     signature: &Signature,
 ) -> Result<Response, ContractError> {
-    if query::verify_signature(storage, session_id, public_key, signature)? {
+    if query::verify_signature(message, public_key, signature)? {
         Ok(Response::default())
     } else {
         Err(ContractError::InvalidSignature)
@@ -406,7 +406,7 @@ pub fn construct_payment_proof(
                     }
 
                     // TODO: Consider enforcing that payload is None for simple payments.
-                    let unsigned_tx_hash = xrpl_multisig::issue_payment(
+                    let unsigned_tx = xrpl_multisig::issue_payment(
                         storage,
                         config,
                         destination_address,
@@ -418,7 +418,7 @@ pub fn construct_payment_proof(
                     Ok(Response::new().add_submessage(start_signing_session(
                         storage,
                         config,
-                        unsigned_tx_hash,
+                        unsigned_tx,
                         self_address,
                         None,
                     )?))
@@ -437,11 +437,11 @@ pub fn construct_payment_proof(
 fn start_signing_session(
     storage: &mut dyn Storage,
     config: &Config,
-    unsigned_tx_hash: HexTxHash,
+    unsigned_tx: XRPLUnsignedTxToSign,
     self_address: Addr,
     verifier_set_id: Option<String>,
 ) -> Result<SubMsg<cosmwasm_std::Empty>, ContractError> {
-    state::REPLY_UNSIGNED_TX_HASH.save(storage, &unsigned_tx_hash)?;
+    state::REPLY_UNSIGNED_TX_HASH.save(storage, &unsigned_tx.unsigned_tx_hash)?;
 
     let verifier_set_id = match verifier_set_id {
         Some(id) => id,
@@ -457,7 +457,7 @@ fn start_signing_session(
 
     let start_sig_msg: multisig::msg::ExecuteMsg = multisig::msg::ExecuteMsg::StartSigningSession {
         verifier_set_id,
-        msg: unsigned_tx_hash.tx_hash.into(),
+        msg: unsigned_tx.xrpl_serialize()?.into(),
         chain_name: config.chain_name.clone(),
         sig_verifier: Some(self_address.into()),
     };
