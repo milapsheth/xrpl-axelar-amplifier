@@ -103,10 +103,3 @@ impl MessageStatus {
         Self { message, status }
     }
 }
-
-#[cw_serde]
-pub struct MigrateMsg {
-    /// Address that can execute all messages that either have unrestricted or admin permission level.
-    /// Should be set to a trusted address that can react to unexpected interruptions to the contract's operation.
-    pub admin_address: nonempty::String,
-}

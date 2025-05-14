@@ -2,11 +2,11 @@ use axelar_wasm_std::{address, killswitch, permission_control, FnExt};
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    to_json_binary, Attribute, Binary, Deps, DepsMut, Env, Event, MessageInfo, Response,
+    to_json_binary, Attribute, Binary, Deps, DepsMut, Empty, Env, Event, MessageInfo, Response,
 };
 
 use crate::error::ContractError;
-use crate::msg::{ExecuteMsg, InstantiateMsg, MigrateMsg, QueryMsg};
+use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
 use crate::state::{Config, CONFIG};
 
 mod execute;
@@ -101,14 +101,9 @@ pub fn query(
 pub fn migrate(
     deps: DepsMut,
     _env: Env,
-    msg: MigrateMsg,
+    _msg: Empty,
 ) -> Result<Response, axelar_wasm_std::error::ContractError> {
     cw2::assert_contract_version(deps.storage, CONTRACT_NAME, BASE_VERSION)?;
-
-    killswitch::init(deps.storage, killswitch::State::Disengaged)?;
-
-    let admin = address::validate_cosmwasm_address(deps.api, &msg.admin_address)?;
-    permission_control::set_admin(deps.storage, &admin)?;
 
     cw2::set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
 
@@ -293,15 +288,7 @@ mod test {
             )
             .unwrap();
 
-        let new_admin = api.addr_make("new_admin").as_str().parse().unwrap();
-        migrate(
-            deps.as_mut(),
-            mock_env(),
-            MigrateMsg {
-                admin_address: new_admin,
-            },
-        )
-        .unwrap();
+        migrate(deps.as_mut(), mock_env(), Empty {}).unwrap();
 
         let contract_version = cw2::get_contract_version(deps.as_mut().storage).unwrap();
         assert_eq!(contract_version.contract, CONTRACT_NAME);
