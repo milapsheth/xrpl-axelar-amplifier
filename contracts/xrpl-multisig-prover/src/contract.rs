@@ -1037,6 +1037,12 @@ mod tests {
         )
         .unwrap();
 
+        let signing_started_event = res
+            .events
+            .iter()
+            .find(|event| event.ty == "xrpl_signing_started");
+        assert!(signing_started_event.is_some());
+
         let res = query_proof(deps.as_ref(), None).unwrap();
         assert_eq!(res.unsigned_tx_hash, unsigned_tx_hash);
         let execute_data = match res.status {

@@ -516,6 +516,13 @@ pub fn sign_xrpl_proof(
             .map(|attr| HexBinary::from_hex(attr.value.as_str()).unwrap())
             .expect("couldn't get unsigned_tx");
 
+    assert_eq!(
+        unsigned_tx,
+        find_event_attribute(&response.events, "wasm-xrpl_signing_started", "unsigned_tx")
+            .map(|attr| HexBinary::from_hex(attr.value.as_str()).unwrap())
+            .expect("couldn't get unsigned_tx")
+    );
+
     for verifier in verifiers {
         let xrpl_signer_address = XRPLAccountId::from(&multisig::key::PublicKey::Ecdsa(
             verifier.key_pair.encoded_verifying_key().into(),
