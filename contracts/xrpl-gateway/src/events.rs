@@ -3,7 +3,7 @@ use cosmwasm_std::{Attribute, Event, HexBinary, Uint256};
 use interchain_token_service::TokenId;
 use router_api::{ChainNameRaw, Message};
 use xrpl_types::msg::XRPLMessage;
-use xrpl_types::types::{XRPLAccountId, XRPLTokenOrXrp};
+use xrpl_types::types::{XRPLAccountId, XRPLToken, XRPLTokenOrXrp};
 
 pub enum XRPLGatewayEvent {
     Verifying {
@@ -61,6 +61,10 @@ pub enum XRPLGatewayEvent {
     LocalTokenRegistered {
         token_id: TokenId,
         token: XRPLTokenOrXrp,
+    },
+    RemoteTokenRegistered {
+        token_id: TokenId,
+        token: XRPLToken,
     },
 }
 
@@ -169,6 +173,11 @@ impl From<XRPLGatewayEvent> for Event {
             }
             XRPLGatewayEvent::LocalTokenRegistered { token_id, token } => {
                 Event::new("local_token_registered")
+                    .add_attribute("token_id", token_id.to_string())
+                    .add_attribute("token", token.to_string())
+            }
+            XRPLGatewayEvent::RemoteTokenRegistered { token_id, token } => {
+                Event::new("remote_token_registered")
                     .add_attribute("token_id", token_id.to_string())
                     .add_attribute("token", token.to_string())
             }

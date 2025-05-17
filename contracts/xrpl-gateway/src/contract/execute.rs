@@ -507,7 +507,9 @@ pub fn register_remote_token(
     token_id: TokenId,
     xrpl_currency: XRPLCurrency,
 ) -> Result<Response, Error> {
-    match state::may_load_remote_token_id(storage, &xrpl_currency).change_context(Error::State)? {
+    let is_new_token_id = match state::may_load_remote_token_id(storage, &xrpl_currency)
+        .change_context(Error::State)?
+    {
         Some(deployed_token_id) => {
             ensure!(
                 deployed_token_id == token_id,
@@ -517,14 +519,18 @@ pub fn register_remote_token(
                     actual: token_id,
                 }
             );
+            false
         }
         None => {
             state::save_remote_token_id(storage, &xrpl_currency, &token_id)
                 .change_context(Error::State)?;
+            true
         }
-    }
+    };
 
-    match state::may_load_xrpl_token(storage, &token_id).change_context(Error::State)? {
+    let is_new_token_registration = match state::may_load_xrpl_token(storage, &token_id)
+        .change_context(Error::State)?
+    {
         Some(deployed_xrpl_token) => {
             ensure!(
                 deployed_xrpl_token.currency == xrpl_currency,
@@ -542,6 +548,7 @@ pub fn register_remote_token(
                     actual: xrpl_multisig,
                 }
             );
+            false
         }
         None => {
             let xrpl_token = XRPLToken {
@@ -550,7 +557,20 @@ pub fn register_remote_token(
             };
 
             state::save_xrpl_token(storage, &token_id, &xrpl_token).change_context(Error::State)?;
+            true
         }
+    };
+
+    if is_new_token_id && is_new_token_registration {
+        return Ok(
+            Response::default().add_event(XRPLGatewayEvent::RemoteTokenRegistered {
+                token_id,
+                token: XRPLToken {
+                    currency: xrpl_currency,
+                    issuer: xrpl_multisig,
+                },
+            }),
+        );
     }
 
     Ok(Response::default())
