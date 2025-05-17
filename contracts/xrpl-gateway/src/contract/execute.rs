@@ -623,6 +623,14 @@ pub fn register_token_instance(
         None => {
             state::save_token_instance_decimals(storage, chain.clone(), token_id, decimals)
                 .change_context(Error::State)?;
+
+            return Ok(
+                Response::default().add_event(XRPLGatewayEvent::TokenInstanceRegistered {
+                    token_id,
+                    chain,
+                    decimals,
+                }),
+            );
         }
     }
 

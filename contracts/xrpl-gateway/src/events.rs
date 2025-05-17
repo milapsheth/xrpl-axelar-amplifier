@@ -66,6 +66,11 @@ pub enum XRPLGatewayEvent {
         token_id: TokenId,
         token: XRPLToken,
     },
+    TokenInstanceRegistered {
+        token_id: TokenId,
+        chain: ChainNameRaw,
+        decimals: u8,
+    },
 }
 
 fn make_message_event<T: Into<Vec<Attribute>>>(event_name: &str, msg: T) -> Event {
@@ -181,6 +186,14 @@ impl From<XRPLGatewayEvent> for Event {
                     .add_attribute("token_id", token_id.to_string())
                     .add_attribute("token", token.to_string())
             }
+            XRPLGatewayEvent::TokenInstanceRegistered {
+                token_id,
+                chain,
+                decimals,
+            } => Event::new("token_instance_registered")
+                .add_attribute("token_id", token_id.to_string())
+                .add_attribute("chain", chain.to_string())
+                .add_attribute("decimals", decimals.to_string()),
         }
     }
 }
