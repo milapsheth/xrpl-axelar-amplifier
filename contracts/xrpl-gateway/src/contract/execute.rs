@@ -75,16 +75,19 @@ pub fn route_incoming_messages(
 
     let msgs_by_status = group_by_status(verifier, msgs_with_payload)?;
     let mut route_msgs = Vec::new();
-    let mut events = Vec::new();
+    let mut events: Vec<Event> = Vec::new();
     for (status, msgs) in &msgs_by_status {
         let mut msgs_to_route = Vec::new();
         for msg in msgs {
-            let message_with_payload = match msg.message.clone() {
+            let (message_with_payload, event) = match msg.message.clone() {
                 XRPLMessage::InterchainTransferMessage(interchain_transfer_message) => {
-                    let InterchainTransfer {
-                        message_with_payload,
-                        token_id,
-                    } = translate_to_interchain_transfer(
+                    let (
+                        InterchainTransfer {
+                            message_with_payload,
+                            token_id,
+                        },
+                        event,
+                    ) = translate_to_interchain_transfer(
                         storage,
                         config,
                         &interchain_transfer_message,
@@ -96,19 +99,18 @@ pub fn route_incoming_messages(
                             storage,
                             &interchain_transfer_message.tx_id,
                             &token_id,
-                            interchain_transfer_message.gas_fee_amount.clone(),
+                            interchain_transfer_message.gas_fee_amount,
                         )
                         .change_context(Error::State)?;
                     }
 
-                    message_with_payload
+                    (message_with_payload, event)
                 }
                 XRPLMessage::CallContractMessage(call_contract_message) => {
-                    let payload = if let Some(payload) = msg.payload.clone() {
-                        payload
-                    } else {
-                        return Err(report!(Error::PayloadHashEmpty));
-                    };
+                    let payload = msg
+                        .payload
+                        .clone()
+                        .ok_or_else(|| report!(Error::PayloadHashEmpty))?;
 
                     let CallContract {
                         message_with_payload,
@@ -117,7 +119,7 @@ pub fn route_incoming_messages(
                         storage,
                         config,
                         &call_contract_message,
-                        payload.clone(),
+                        payload,
                     )?;
 
                     if status == &VerificationStatus::SucceededOnSourceChain {
@@ -125,12 +127,12 @@ pub fn route_incoming_messages(
                             storage,
                             &call_contract_message.tx_id,
                             &gas_token_id,
-                            call_contract_message.gas_fee_amount.clone(),
+                            call_contract_message.gas_fee_amount,
                         )
                         .change_context(Error::State)?;
                     }
 
-                    Some(message_with_payload)
+                    (Some(message_with_payload), None)
                 }
                 _ => {
                     return Err(report!(Error::UnsupportedIncomingMessage(
@@ -145,13 +147,24 @@ pub fn route_incoming_messages(
             }) = message_with_payload
             {
                 msgs_to_route.push(msg.clone());
-                events.extend(vec![
-                    into_route_event(status, msg.clone()),
-                    Event::from(XRPLGatewayEvent::ContractCalled {
-                        msg,
-                        payload: payload.into(),
-                    }),
-                ]);
+
+                events.extend(match status {
+                    &VerificationStatus::SucceededOnSourceChain => {
+                        let mut routing_events = vec![
+                            XRPLGatewayEvent::RoutingIncoming { msg: msg.clone() }.into(),
+                            XRPLGatewayEvent::ContractCalled {
+                                msg,
+                                payload: payload.into(),
+                            }
+                            .into(),
+                        ];
+                        if let Some(event) = event {
+                            routing_events.push(event.into());
+                        }
+                        routing_events
+                    }
+                    _ => vec![XRPLGatewayEvent::UnfitForRouting { msg }.into()],
+                });
             }
         }
         route_msgs.extend(filter_routable_messages(*status, &msgs_to_route));
@@ -212,7 +225,7 @@ pub fn translate_to_interchain_transfer(
     config: &Config,
     interchain_transfer_message: &XRPLInterchainTransferMessage,
     payload: Option<nonempty::HexBinary>,
-) -> Result<InterchainTransfer, Error> {
+) -> Result<(InterchainTransfer, Option<XRPLGatewayEvent>), Error> {
     match payload.clone() {
         None => {
             ensure!(
@@ -252,9 +265,13 @@ pub fn translate_to_interchain_transfer(
             .as_bytes(),
     ))
     .change_context(Error::InvalidAddress)?;
-    let destination_address = interchain_transfer_message.destination_address.clone();
-    let destination_chain = interchain_transfer_message.destination_chain.clone();
+    let destination_address: nonempty::HexBinary = nonempty::HexBinary::try_from(
+        HexBinary::from_hex(&interchain_transfer_message.destination_address)
+            .change_context(Error::InvalidAddress)?,
+    )
+    .change_context(Error::InvalidAddress)?;
 
+    let destination_chain = &interchain_transfer_message.destination_chain;
     let transfer_amount = &interchain_transfer_message.transfer_amount;
 
     let amount = match transfer_amount.clone() {
@@ -269,7 +286,7 @@ pub fn translate_to_interchain_transfer(
 
             scale_to_decimals(token_amount, destination_decimals).change_context(
                 Error::InvalidTransferAmount {
-                    destination_chain,
+                    destination_chain: destination_chain.to_owned(),
                     amount: transfer_amount.to_owned(),
                 },
             )?
@@ -277,41 +294,52 @@ pub fn translate_to_interchain_transfer(
     };
 
     if amount.is_zero() {
-        return Ok(InterchainTransfer {
-            message_with_payload: None,
-            token_id,
-        });
+        return Ok((
+            InterchainTransfer {
+                message_with_payload: None,
+                token_id,
+            },
+            None,
+        ));
     }
 
+    let its_msg = interchain_token_service::InterchainTransfer {
+        token_id,
+        source_address: source_address.clone(),
+        destination_address: destination_address.clone(),
+        amount: nonempty::Uint256::try_from(amount).expect("amount cannot be zero"),
+        data: payload.clone(),
+    };
+
     let payload = interchain_token_service::HubMessage::SendToHub {
-        destination_chain: interchain_transfer_message.clone().destination_chain,
-        message: interchain_token_service::Message::InterchainTransfer(
-            interchain_token_service::InterchainTransfer {
-                token_id,
-                source_address,
-                destination_address: nonempty::HexBinary::try_from(
-                    HexBinary::from_hex(&destination_address)
-                        .change_context(Error::InvalidAddress)?,
-                )
-                .change_context(Error::InvalidAddress)?,
-                amount: amount.try_into().expect("amount cannot be zero"),
-                data: payload.clone(),
-            },
-        ),
+        destination_chain: destination_chain.clone(),
+        message: interchain_token_service::Message::InterchainTransfer(its_msg.clone()),
     }
     .abi_encode();
 
     let cc_id = interchain_transfer_message.cc_id(config.chain_name.clone().into());
-    let its_msg = construct_its_hub_message(config, cc_id, payload.clone())?;
+    let message_with_payload = MessageWithPayload {
+        message: construct_its_hub_message(config, cc_id, payload.clone())?,
+        payload: TryInto::<nonempty::HexBinary>::try_into(payload)
+            .change_context(Error::PayloadEncodingFailed)?,
+    };
 
-    Ok(InterchainTransfer {
-        message_with_payload: Some(MessageWithPayload {
-            message: its_msg,
-            payload: TryInto::<nonempty::HexBinary>::try_into(payload)
-                .change_context(Error::PayloadEncodingFailed)?,
-        }),
+    let event = XRPLGatewayEvent::InterchainTransfer {
         token_id,
-    })
+        source_address: interchain_transfer_message.source_address.clone(),
+        destination_chain: destination_chain.clone(),
+        destination_address: its_msg.destination_address,
+        amount: its_msg.amount,
+        data_hash: interchain_transfer_message.payload_hash,
+    };
+
+    Ok((
+        InterchainTransfer {
+            message_with_payload: Some(message_with_payload),
+            token_id,
+        },
+        Some(event),
+    ))
 }
 
 pub fn translate_to_call_contract(
@@ -385,14 +413,25 @@ pub fn register_token_metadata(
     nexus_client: &nexus::Client,
     xrpl_token: XRPLTokenOrXrp,
 ) -> Result<Response, Error> {
+    let decimals = xrpl_token.decimals();
+    let token_address = xrpl_token.token_address();
+
     let hub_msg = interchain_token_service::HubMessage::RegisterTokenMetadata(
         interchain_token_service::RegisterTokenMetadata {
-            decimals: xrpl_token.decimals(),
-            token_address: xrpl_token.token_address(),
+            decimals,
+            token_address: token_address.clone(),
         },
     );
 
-    route_hub_message(config, nexus_client, hub_msg)
+    route_hub_message(
+        config,
+        nexus_client,
+        hub_msg,
+        XRPLGatewayEvent::TokenMetadataRegistered {
+            token_address,
+            decimals,
+        },
+    )
 }
 
 pub fn register_local_token(
@@ -442,7 +481,19 @@ pub fn register_local_token(
         }
     }
 
-    Ok(Response::default())
+    Ok(
+        Response::default().add_event(XRPLGatewayEvent::InterchainTokenIdClaimed {
+            token_id,
+            deployer: xrpl_token
+                .issuer
+                .as_bytes()
+                .as_slice()
+                .to_vec()
+                .try_into()
+                .expect("issuer is always 20 bytes"),
+            salt,
+        }),
+    )
 }
 
 pub fn register_remote_token(
@@ -557,6 +608,7 @@ fn route_hub_message(
     config: &Config,
     nexus_client: &nexus::Client,
     hub_message: interchain_token_service::HubMessage,
+    event: XRPLGatewayEvent,
 ) -> Result<Response, Error> {
     let payload = hub_message.abi_encode();
     let cc_id = unique_cross_chain_id(nexus_client, config.chain_name.clone())?;
@@ -573,6 +625,7 @@ fn route_hub_message(
                 msg: its_msg,
                 payload,
             },
+            event,
         ]))
 }
 
@@ -604,23 +657,42 @@ pub fn link_token(
         XRPLTokenOrXrp::Issued(token)
     };
 
-    let its_msg =
-        interchain_token_service::Message::LinkToken(interchain_token_service::LinkToken {
-            token_id,
-            token_manager_type: link_token.token_manager_type,
-            source_token_address: nonempty::HexBinary::try_from(
-                xrpl_token.serialize().as_bytes().to_vec(),
-            )
-            .change_context(Error::InvalidToken)?,
-            destination_token_address: link_token.destination_token_address,
-            params: link_token.params,
-        });
+    let LinkToken {
+        token_manager_type,
+        destination_token_address,
+        params,
+    } = link_token;
+
+    let source_token_address =
+        nonempty::HexBinary::try_from(xrpl_token.serialize().as_bytes().to_vec())
+            .change_context(Error::InvalidToken)?;
+
+    let its_msg = interchain_token_service::LinkToken {
+        token_id,
+        token_manager_type,
+        source_token_address: source_token_address.clone(),
+        destination_token_address: destination_token_address.clone(),
+        params: params.clone(),
+    };
 
     let hub_msg = interchain_token_service::HubMessage::SendToHub {
-        destination_chain,
-        message: its_msg,
+        destination_chain: destination_chain.clone(),
+        message: interchain_token_service::Message::LinkToken(its_msg),
     };
-    route_hub_message(config, nexus_client, hub_msg)
+
+    route_hub_message(
+        config,
+        nexus_client,
+        hub_msg,
+        XRPLGatewayEvent::LinkTokenStarted {
+            token_id,
+            destination_chain,
+            token_manager_type,
+            source_token_address,
+            destination_token_address,
+            params,
+        },
+    )
 }
 
 pub fn deploy_remote_token(
@@ -652,21 +724,39 @@ pub fn deploy_remote_token(
         destination_decimals,
     )?;
 
+    let TokenMetadata {
+        name: token_name,
+        symbol: token_symbol,
+    } = token_metadata;
+
     let its_msg = interchain_token_service::Message::DeployInterchainToken(
         interchain_token_service::DeployInterchainToken {
             token_id,
-            name: token_metadata.name,
-            symbol: token_metadata.symbol,
+            name: token_name.clone(),
+            symbol: token_symbol.clone(),
             decimals: destination_decimals,
             minter: None,
         },
     );
 
     let hub_msg = interchain_token_service::HubMessage::SendToHub {
-        destination_chain,
+        destination_chain: destination_chain.clone(),
         message: its_msg,
     };
-    route_hub_message(config, nexus_client, hub_msg)
+
+    route_hub_message(
+        config,
+        nexus_client,
+        hub_msg,
+        XRPLGatewayEvent::InterchainTokenDeploymentStarted {
+            token_id,
+            token_name,
+            token_symbol,
+            token_decimals: destination_decimals,
+            minter: None,
+            destination_chain,
+        },
+    )
 }
 
 pub fn disable_execution(storage: &mut dyn Storage) -> Result<Response, Error> {
@@ -808,15 +898,6 @@ fn filter_successful_messages<T: Clone>(status: VerificationStatus, msgs: &[T]) 
 // instead of requiring the caller to allocate a vector for every message
 fn filter_routable_messages(status: VerificationStatus, msgs: &[Message]) -> Vec<Message> {
     filter_successful_messages(status, msgs)
-}
-
-fn into_route_event(status: &VerificationStatus, msg: Message) -> Event {
-    match status {
-        &VerificationStatus::SucceededOnSourceChain => {
-            XRPLGatewayEvent::RoutingIncoming { msg }.into()
-        }
-        _ => XRPLGatewayEvent::UnfitForRouting { msg }.into(),
-    }
 }
 
 fn flat_unzip<A, B>(x: impl Iterator<Item = (Vec<A>, Vec<B>)>) -> (Vec<A>, Vec<B>) {

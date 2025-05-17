@@ -16,6 +16,7 @@ use xrpl_types::types::{
     XRPLAccountId, XRPLCurrency, XRPLPaymentAmount, XRPLToken, XRPLTokenOrXrp,
 };
 
+use crate::events::XRPLGatewayEvent;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
 use crate::state::Config;
 use crate::{state, token_id};
@@ -214,7 +215,18 @@ pub fn instantiate(
 
     killswitch::init(deps.storage, killswitch::State::Disengaged)?;
 
-    Ok(Response::new())
+    Ok(
+        Response::default().add_event(XRPLGatewayEvent::InterchainTokenIdClaimed {
+            token_id: xrp_token_id,
+            deployer: xrp_issuer
+                .as_bytes()
+                .as_slice()
+                .to_vec()
+                .try_into()
+                .expect("issuer is always 20 bytes"),
+            salt,
+        }),
+    )
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
