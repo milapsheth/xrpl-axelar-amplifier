@@ -448,24 +448,30 @@ pub fn register_local_token(
     let salt = token_id::currency_hash(&xrpl_token.currency);
     let token_id = token_id::linked_token_id(chain_name_hash, &xrpl_token.issuer, salt);
 
-    match state::may_load_local_token_id(storage, &xrpl_token).change_context(Error::State)? {
-        Some(deployed_token_id) => {
-            ensure!(
-                deployed_token_id == token_id,
-                Error::LocalTokenDeployedIdMismatch {
-                    xrpl_token,
-                    expected: deployed_token_id,
-                    actual: token_id,
-                }
-            );
-        }
-        None => {
-            state::save_local_token_id(storage, &xrpl_token, &token_id)
-                .change_context(Error::State)?;
-        }
-    }
+    let is_new_token_id =
+        match state::may_load_local_token_id(storage, &xrpl_token).change_context(Error::State)? {
+            Some(deployed_token_id) => {
+                ensure!(
+                    deployed_token_id == token_id,
+                    Error::LocalTokenDeployedIdMismatch {
+                        xrpl_token,
+                        expected: deployed_token_id,
+                        actual: token_id,
+                    }
+                );
+                false
+            }
+            None => {
+                state::save_local_token_id(storage, &xrpl_token, &token_id)
+                    .change_context(Error::State)?;
 
-    match state::may_load_xrpl_token(storage, &token_id).change_context(Error::State)? {
+                true
+            }
+        };
+
+    let is_new_token_registration = match state::may_load_xrpl_token(storage, &token_id)
+        .change_context(Error::State)?
+    {
         Some(deployed_xrpl_token) => {
             ensure!(
                 deployed_xrpl_token == xrpl_token,
@@ -475,25 +481,24 @@ pub fn register_local_token(
                     actual: xrpl_token,
                 }
             );
+            false
         }
         None => {
             state::save_xrpl_token(storage, &token_id, &xrpl_token).change_context(Error::State)?;
+            true
         }
+    };
+
+    if is_new_token_id && is_new_token_registration {
+        return Ok(
+            Response::default().add_event(XRPLGatewayEvent::LocalTokenRegistered {
+                token_id,
+                token: XRPLTokenOrXrp::Issued(xrpl_token),
+            }),
+        );
     }
 
-    Ok(
-        Response::default().add_event(XRPLGatewayEvent::InterchainTokenIdClaimed {
-            token_id,
-            deployer: xrpl_token
-                .issuer
-                .as_bytes()
-                .as_slice()
-                .to_vec()
-                .try_into()
-                .expect("issuer is always 20 bytes"),
-            salt,
-        }),
-    )
+    Ok(Response::default())
 }
 
 pub fn register_remote_token(

@@ -3,7 +3,7 @@ use cosmwasm_std::{Attribute, Event, HexBinary, Uint256};
 use interchain_token_service::TokenId;
 use router_api::{ChainNameRaw, Message};
 use xrpl_types::msg::XRPLMessage;
-use xrpl_types::types::XRPLAccountId;
+use xrpl_types::types::{XRPLAccountId, XRPLTokenOrXrp};
 
 pub enum XRPLGatewayEvent {
     Verifying {
@@ -58,10 +58,9 @@ pub enum XRPLGatewayEvent {
         minter: Option<nonempty::HexBinary>,
         destination_chain: ChainNameRaw,
     },
-    InterchainTokenIdClaimed {
+    LocalTokenRegistered {
         token_id: TokenId,
-        deployer: nonempty::HexBinary,
-        salt: [u8; 32],
+        token: XRPLTokenOrXrp,
     },
 }
 
@@ -168,14 +167,11 @@ impl From<XRPLGatewayEvent> for Event {
 
                 event
             }
-            XRPLGatewayEvent::InterchainTokenIdClaimed {
-                token_id,
-                deployer,
-                salt,
-            } => Event::new("interchain_token_id_claimed")
-                .add_attribute("token_id", token_id.to_string())
-                .add_attribute("deployer", deployer.to_string())
-                .add_attribute("salt", HexBinary::from(salt).to_string()),
+            XRPLGatewayEvent::LocalTokenRegistered { token_id, token } => {
+                Event::new("local_token_registered")
+                    .add_attribute("token_id", token_id.to_string())
+                    .add_attribute("token", token.to_string())
+            }
         }
     }
 }

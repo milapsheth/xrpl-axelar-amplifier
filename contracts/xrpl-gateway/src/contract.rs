@@ -216,15 +216,9 @@ pub fn instantiate(
     killswitch::init(deps.storage, killswitch::State::Disengaged)?;
 
     Ok(
-        Response::default().add_event(XRPLGatewayEvent::InterchainTokenIdClaimed {
+        Response::default().add_event(XRPLGatewayEvent::LocalTokenRegistered {
             token_id: xrp_token_id,
-            deployer: xrp_issuer
-                .as_bytes()
-                .as_slice()
-                .to_vec()
-                .try_into()
-                .expect("issuer is always 20 bytes"),
-            salt,
+            token: XRPLTokenOrXrp::Xrp,
         }),
     )
 }
