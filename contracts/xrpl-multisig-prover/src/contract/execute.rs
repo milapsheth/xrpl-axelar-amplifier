@@ -396,6 +396,10 @@ pub fn construct_payment_proof(
             match message {
                 // Source address (ITS on source chain) has been validated by ITS hub.
                 interchain_token_service::Message::InterchainTransfer(interchain_transfer) => {
+                    if interchain_transfer.data.is_some() {
+                        return Err(ContractError::DataNotSupported);
+                    }
+
                     let destination_address =
                         std::str::from_utf8(interchain_transfer.destination_address.as_slice())
                             .map_err(|_| ContractError::InvalidDestinationAddress)
@@ -415,7 +419,6 @@ pub fn construct_payment_proof(
                         return Ok(Response::default());
                     }
 
-                    // TODO: Consider enforcing that payload is None for simple payments.
                     let unsigned_tx = xrpl_multisig::issue_payment(
                         storage,
                         config,

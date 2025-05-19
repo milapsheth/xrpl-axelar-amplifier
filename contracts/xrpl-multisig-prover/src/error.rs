@@ -11,6 +11,9 @@ use xrpl_types::types::{AxelarSigner, XRPLPath, XRPLToken, XRPLTxStatus};
 
 #[derive(Error, Debug, PartialEq, IntoContractError)]
 pub enum ContractError {
+    #[error("data not supported")]
+    DataNotSupported,
+
     #[error("division by zero error")]
     DivisionByZero,
 
