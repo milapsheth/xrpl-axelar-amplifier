@@ -1,5 +1,7 @@
 use axelar_wasm_std::msg_id::HexTxHash;
+use axelar_wasm_std::FnExt;
 use cosmwasm_std::Storage;
+use interchain_token_service::TokenId;
 use router_api::CrossChainId;
 use xrpl_types::types::{
     XRPLAccountId, XRPLCrossCurrencyOptions, XRPLPaymentAmount, XRPLPaymentTx, XRPLSequence,
@@ -9,6 +11,7 @@ use xrpl_types::types::{
 
 use crate::axelar_verifiers::VerifierSet;
 use crate::error::ContractError;
+use crate::events::Event;
 use crate::state::{
     Config, TxInfo, AVAILABLE_TICKETS, CONSUMED_TICKET_TO_UNSIGNED_TX_HASH,
     CROSS_CHAIN_ID_TO_TICKET, CURRENT_VERIFIER_SET, FEE_RESERVE, LAST_ASSIGNED_TICKET_NUMBER,
@@ -244,9 +247,10 @@ pub fn issue_signer_list_set(
 // Returns the new verifier set, if it was affected.
 pub fn confirm_prover_message(
     storage: &mut dyn Storage,
+    gateway: &xrpl_gateway::Client,
     unsigned_tx_hash: HexTxHash,
     new_status: XRPLTxStatus,
-) -> Result<Option<VerifierSet>, ContractError> {
+) -> Result<(Option<VerifierSet>, Option<Event>), ContractError> {
     let mut tx_info = UNSIGNED_TX_HASH_TO_TX_INFO.load(storage, &unsigned_tx_hash.tx_hash)?;
     if tx_info.status != XRPLTxStatus::Pending {
         return Err(ContractError::TxStatusAlreadyConfirmed);
@@ -284,22 +288,27 @@ pub fn confirm_prover_message(
     UNSIGNED_TX_HASH_TO_TX_INFO.save(storage, &unsigned_tx_hash.tx_hash, &tx_info)?;
 
     if new_status != XRPLTxStatus::Succeeded {
-        return Ok(None);
+        return Ok((None, None));
     }
 
     Ok(match &tx_info.unsigned_tx {
         XRPLUnsignedTx::TicketCreate(tx) => {
-            mark_tickets_available(
-                storage,
-                tx_sequence_number
-                    .checked_add(1)
-                    .ok_or(ContractError::Overflow)?
-                    ..tx_sequence_number
-                        .checked_add(tx.ticket_count)
-                        .and_then(|sum| sum.checked_add(1))
-                        .ok_or(ContractError::Overflow)?,
-            )?;
-            None
+            let tickets_created = tx_sequence_number
+                .checked_add(1)
+                .ok_or(ContractError::Overflow)?
+                ..tx_sequence_number
+                    .checked_add(tx.ticket_count)
+                    .and_then(|sum| sum.checked_add(1))
+                    .ok_or(ContractError::Overflow)?;
+
+            mark_tickets_available(storage, tickets_created.clone())?;
+
+            let event = Event::TicketsCreated {
+                first: tickets_created.start,
+                last: tickets_created.end,
+            };
+
+            (None, Some(event))
         }
         XRPLUnsignedTx::SignerListSet(tx) => {
             let next_verifier_set = NEXT_VERIFIER_SET
@@ -321,26 +330,55 @@ pub fn confirm_prover_message(
             CURRENT_VERIFIER_SET.save(storage, &next_verifier_set)?;
             NEXT_VERIFIER_SET.remove(storage);
 
-            Some(next_verifier_set)
+            let new_verifier_set: multisig::verifier_set::VerifierSet =
+                next_verifier_set.clone().try_into()?;
+            let event = Event::VerifierSetUpdated {
+                id: new_verifier_set.id(),
+                count: next_verifier_set.signers.len(),
+                quorum: next_verifier_set.quorum,
+            };
+
+            (Some(next_verifier_set), Some(event))
         }
-        XRPLUnsignedTx::Payment(_) => {
-            if tx_info.original_cc_id.is_none() {
+        XRPLUnsignedTx::Payment(tx) => {
+            if let Some(cc_id) = tx_info.original_cc_id {
+                let XRPLPaymentTx {
+                    amount,
+                    destination,
+                    ..
+                } = tx.clone();
+
+                let event = Event::InterchainTransferReceived {
+                    message_id: cc_id.message_id,
+                    token_id: payment_amount_to_token_id(gateway, amount.clone())?,
+                    source_chain: cc_id.source_chain,
+                    destination_address: destination,
+                    amount,
+                };
+
+                (None, Some(event))
+            } else {
                 return Err(ContractError::PaymentMissingCrossChainId);
             }
-
-            None
         }
         XRPLUnsignedTx::TrustSet(tx) => {
-            if TRUST_LINE.may_load(storage, &tx.token)?.is_none() {
+            if let Some(()) = TRUST_LINE.may_load(storage, &tx.token)? {
+                (None, None)
+            } else {
                 TRUST_LINE.save(storage, &tx.token, &())?;
                 let count = TRUST_LINE_COUNT.may_load(storage)?.unwrap_or_default();
                 TRUST_LINE_COUNT.save(
                     storage,
                     &(count.checked_add(1).ok_or(ContractError::Overflow)?),
                 )?;
-            }
 
-            None
+                let event = Event::TrustLineCreated {
+                    token_id: token_to_token_id(gateway, tx.token.clone())?,
+                    token: tx.token.clone(),
+                };
+
+                (None, Some(event))
+            }
         }
     })
 }
@@ -439,6 +477,28 @@ fn mark_ticket_unavailable(storage: &mut dyn Storage, ticket: u32) -> Result<(),
         },
     )?;
     Ok(())
+}
+
+fn token_to_token_id(
+    gateway: &xrpl_gateway::Client,
+    token: XRPLToken,
+) -> Result<TokenId, ContractError> {
+    gateway
+        .linked_token_id(token.clone())
+        .map_err(|_| ContractError::FailedToGetLinkedTokenId(token))
+}
+
+fn payment_amount_to_token_id(
+    gateway: &xrpl_gateway::Client,
+    amount: XRPLPaymentAmount,
+) -> Result<TokenId, ContractError> {
+    match amount {
+        XRPLPaymentAmount::Drops(_) => gateway
+            .xrp_token_id()
+            .map_err(|_| ContractError::FailedToGetXrpTokenId)?,
+        XRPLPaymentAmount::Issued(token, _) => token_to_token_id(gateway, token)?,
+    }
+    .then(Ok)
 }
 
 #[cfg(test)]
