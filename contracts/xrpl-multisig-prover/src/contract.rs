@@ -22,7 +22,7 @@ pub const START_MULTISIG_REPLY_ID: u64 = 1;
 
 const CONTRACT_NAME: &str = env!("CARGO_PKG_NAME");
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
-const BASE_VERSION: &str = "1.2.0";
+const BASE_VERSION: &str = "1.3.1";
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
