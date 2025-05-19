@@ -20,6 +20,9 @@ pub enum ContractError {
     #[error("failed to build verifier snapshot")]
     FailedToBuildSnapshot,
 
+    #[error("failed to update admin")]
+    FailedToUpdateAdmin,
+
     #[error("invalid source gateway address")]
     InvalidSourceGatewayAddress,
 

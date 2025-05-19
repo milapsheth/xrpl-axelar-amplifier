@@ -74,6 +74,9 @@ pub fn execute(
         )?),
         ExecuteMsg::DisableExecution => Ok(execute::disable_execution(deps.storage)?),
         ExecuteMsg::EnableExecution => Ok(execute::enable_execution(deps.storage)?),
+        ExecuteMsg::UpdateAdmin { new_admin_address } => {
+            Ok(execute::update_admin(deps, new_admin_address)?)
+        }
     }
 }
 

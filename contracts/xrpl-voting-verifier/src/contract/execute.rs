@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use axelar_wasm_std::utils::TryMapExt;
 use axelar_wasm_std::voting::{PollId, PollResults, Vote, WeightedPoll};
-use axelar_wasm_std::{killswitch, snapshot, MajorityThreshold, VerificationStatus};
+use axelar_wasm_std::{
+    address, killswitch, permission_control, snapshot, MajorityThreshold, VerificationStatus,
+};
 use cosmwasm_std::{
     to_json_binary, Deps, DepsMut, Env, Event, MessageInfo, OverflowError, OverflowOperation,
     Response, Storage, WasmMsg,
@@ -294,4 +296,12 @@ pub fn disable_execution(storage: &mut dyn Storage) -> Result<Response, Contract
 pub fn enable_execution(storage: &mut dyn Storage) -> Result<Response, ContractError> {
     killswitch::disengage(storage, events::ExecutionEnabled)
         .change_context(ContractError::EnableExecution)
+}
+
+pub fn update_admin(deps: DepsMut, new_admin_address: String) -> Result<Response, ContractError> {
+    let new_admin = address::validate_cosmwasm_address(deps.api, &new_admin_address)
+        .map_err(|_| ContractError::FailedToUpdateAdmin)?;
+    permission_control::set_admin(deps.storage, &new_admin)
+        .map_err(|_| ContractError::FailedToUpdateAdmin)?;
+    Ok(Response::new())
 }

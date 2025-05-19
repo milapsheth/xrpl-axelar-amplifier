@@ -66,6 +66,10 @@ pub enum ExecuteMsg {
     // Disengages execution killswitch.
     #[permission(Elevated)]
     DisableExecution,
+
+    // Updates the address of the admin.
+    #[permission(Elevated)]
+    UpdateAdmin { new_admin_address: String },
 }
 
 #[cw_serde]
