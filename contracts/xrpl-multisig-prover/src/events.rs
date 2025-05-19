@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 
 use axelar_wasm_std::msg_id::HexTxHash;
-use axelar_wasm_std::IntoEvent;
+use axelar_wasm_std::{nonempty, IntoEvent};
 use cosmwasm_std::{HexBinary, Uint64};
+use interchain_token_service::TokenId;
 use multisig::key::PublicKey;
-use router_api::{ChainName, CrossChainId};
+use router_api::{ChainName, ChainNameRaw, CrossChainId};
+use xrpl_types::types::{XRPLAccountId, XRPLPaymentAmount, XRPLToken};
 
 #[derive(IntoEvent)]
 pub enum Event {
@@ -23,4 +25,24 @@ pub enum Event {
     },
     ExecutionDisabled,
     ExecutionEnabled,
+    InterchainTransferReceived {
+        message_id: nonempty::String,
+        token_id: TokenId,
+        source_chain: ChainNameRaw,
+        destination_address: XRPLAccountId,
+        amount: XRPLPaymentAmount,
+    },
+    TicketsCreated {
+        first: u32,
+        last: u32,
+    },
+    TrustLineCreated {
+        token_id: TokenId,
+        token: XRPLToken,
+    },
+    VerifierSetUpdated {
+        id: String,
+        count: usize,
+        quorum: u32,
+    },
 }

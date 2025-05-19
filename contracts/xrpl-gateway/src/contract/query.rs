@@ -65,7 +65,7 @@ pub fn translate_to_interchain_transfer(
     message: &XRPLInterchainTransferMessage,
     payload: Option<nonempty::HexBinary>,
 ) -> Result<Binary, Error> {
-    let interchain_transfer =
+    let (interchain_transfer, _) =
         execute::translate_to_interchain_transfer(storage, config, message, payload)?;
     Ok(to_json_binary(&interchain_transfer).map_err(Error::from)?)
 }

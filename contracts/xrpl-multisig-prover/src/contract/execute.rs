@@ -29,7 +29,7 @@ use crate::{axelar_verifiers, xrpl_multisig};
 
 pub fn construct_trust_set_proof(
     storage: &mut dyn Storage,
-    gateway: xrpl_gateway::Client,
+    gateway: &xrpl_gateway::Client,
     self_address: Addr,
     config: &Config,
     token_id: TokenId,
@@ -82,6 +82,7 @@ pub fn construct_ticket_create_proof(
 pub fn confirm_prover_message(
     storage: &mut dyn Storage,
     querier: QuerierWrapper,
+    gateway: &xrpl_gateway::Client,
     config: &Config,
     prover_message: XRPLProverMessage,
 ) -> Result<Response, ContractError> {
@@ -100,11 +101,16 @@ pub fn confirm_prover_message(
         | VerificationStatus::NotFoundOnSourceChain => {}
     }
 
-    if let Some(confirmed_verifier_set) = xrpl_multisig::confirm_prover_message(
+    let (maybe_verifier_set, maybe_event) = xrpl_multisig::confirm_prover_message(
         storage,
+        gateway,
         prover_message.unsigned_tx_hash,
         status.into(),
-    )? {
+    )?;
+
+    let mut response = Response::new();
+
+    if let Some(confirmed_verifier_set) = maybe_verifier_set {
         let coordinator: coordinator::Client =
             client::ContractClient::new(querier, &config.coordinator).into();
 
@@ -117,12 +123,16 @@ pub fn confirm_prover_message(
             .map(|signer| signer.address.to_string())
             .collect::<HashSet<String>>();
 
-        return Ok(Response::new()
+        response = response
             .add_message(multisig.register_verifier_set(confirmed_verifier_set.try_into()?))
-            .add_message(coordinator.set_active_verifiers(active_verifiers)));
+            .add_message(coordinator.set_active_verifiers(active_verifiers));
     }
 
-    Ok(Response::default())
+    if let Some(event) = maybe_event {
+        response = response.add_event(event);
+    }
+
+    Ok(response)
 }
 
 pub fn confirm_add_reserves_message(
@@ -260,7 +270,7 @@ pub fn update_admin(deps: DepsMut, new_admin_address: String) -> Result<Response
 }
 
 fn compute_xrpl_amount(
-    gateway: xrpl_gateway::Client,
+    gateway: &xrpl_gateway::Client,
     token_id: TokenId,
     source_chain: ChainNameRaw,
     source_amount: Uint256,
@@ -307,7 +317,7 @@ fn compute_xrpl_amount(
 pub fn construct_payment_proof(
     storage: &mut dyn Storage,
     querier: QuerierWrapper,
-    gateway: xrpl_gateway::Client,
+    gateway: &xrpl_gateway::Client,
     self_address: Addr,
     block_height: u64,
     config: &Config,

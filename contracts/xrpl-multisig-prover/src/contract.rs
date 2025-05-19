@@ -81,8 +81,8 @@ pub fn execute(
     msg: ExecuteMsg,
 ) -> Result<Response, axelar_wasm_std::error::ContractError> {
     let config = CONFIG.load(deps.storage).expect("failed to load config");
-    let gateway: xrpl_gateway::Client =
-        client::ContractClient::new(deps.querier, &config.gateway).into();
+    let gateway: &xrpl_gateway::Client =
+        &client::ContractClient::new(deps.querier, &config.gateway).into();
 
     match msg.ensure_permissions(deps.storage, &info.sender)? {
         ExecuteMsg::TrustSet { token_id } => execute::construct_trust_set_proof(
@@ -105,9 +105,13 @@ pub fn execute(
         ExecuteMsg::UpdateVerifierSet => {
             execute::update_verifier_set(deps.storage, deps.querier, env)
         }
-        ExecuteMsg::ConfirmProverMessage { prover_message } => {
-            execute::confirm_prover_message(deps.storage, deps.querier, &config, prover_message)
-        }
+        ExecuteMsg::ConfirmProverMessage { prover_message } => execute::confirm_prover_message(
+            deps.storage,
+            deps.querier,
+            gateway,
+            &config,
+            prover_message,
+        ),
         ExecuteMsg::TicketCreate => {
             execute::construct_ticket_create_proof(deps.storage, env.contract.address, &config)
         }

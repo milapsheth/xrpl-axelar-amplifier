@@ -23,6 +23,9 @@ pub enum ContractError {
     #[error("failed to build verifier set")]
     FailedToBuildVerifierSet,
 
+    #[error("failed to get linked token ID for {0} from gateway")]
+    FailedToGetLinkedTokenId(XRPLToken),
+
     #[error("failed to get token instance decimals for token with ID {token_id} on chain {chain} from gateway")]
     FailedToGetTokenInstanceDecimals {
         token_id: TokenId,
