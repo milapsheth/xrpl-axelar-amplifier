@@ -33,15 +33,18 @@ pub enum Event {
         amount: XRPLPaymentAmount,
     },
     TicketsCreated {
+        tx_id: nonempty::String,
         first: u32,
         last: u32,
     },
     TrustLineCreated {
+        tx_id: nonempty::String,
         token_id: TokenId,
         token: XRPLToken,
     },
     VerifierSetUpdated {
-        id: String,
+        tx_id: nonempty::String,
+        verifier_set_id: String,
         count: usize,
         quorum: u32,
     },

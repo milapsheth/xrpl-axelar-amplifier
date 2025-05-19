@@ -104,6 +104,7 @@ pub fn confirm_prover_message(
     let (maybe_verifier_set, maybe_event) = xrpl_multisig::confirm_prover_message(
         storage,
         gateway,
+        prover_message.tx_id,
         prover_message.unsigned_tx_hash,
         status.into(),
     )?;

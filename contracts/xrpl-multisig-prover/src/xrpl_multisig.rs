@@ -248,6 +248,7 @@ pub fn issue_signer_list_set(
 pub fn confirm_prover_message(
     storage: &mut dyn Storage,
     gateway: &xrpl_gateway::Client,
+    tx_id: HexTxHash,
     unsigned_tx_hash: HexTxHash,
     new_status: XRPLTxStatus,
 ) -> Result<(Option<VerifierSet>, Option<Event>), ContractError> {
@@ -304,6 +305,7 @@ pub fn confirm_prover_message(
             mark_tickets_available(storage, tickets_created.clone())?;
 
             let event = Event::TicketsCreated {
+                tx_id: tx_id.tx_hash_as_hex_no_prefix(),
                 first: tickets_created.start,
                 last: tickets_created.end,
             };
@@ -333,7 +335,8 @@ pub fn confirm_prover_message(
             let new_verifier_set: multisig::verifier_set::VerifierSet =
                 next_verifier_set.clone().try_into()?;
             let event = Event::VerifierSetUpdated {
-                id: new_verifier_set.id(),
+                tx_id: tx_id.tx_hash_as_hex_no_prefix(),
+                verifier_set_id: new_verifier_set.id(),
                 count: next_verifier_set.signers.len(),
                 quorum: next_verifier_set.quorum,
             };
@@ -373,6 +376,7 @@ pub fn confirm_prover_message(
                 )?;
 
                 let event = Event::TrustLineCreated {
+                    tx_id: tx_id.tx_hash_as_hex_no_prefix(),
                     token_id: token_to_token_id(gateway, tx.token.clone())?,
                     token: tx.token.clone(),
                 };
