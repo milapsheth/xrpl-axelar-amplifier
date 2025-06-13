@@ -689,6 +689,8 @@ fn can_add_reserves_to_xrpl_multisig() {
         ..
     } = test_utils::setup_xrpl_source_test_case();
 
+    let initial_fee_reserve = test_utils::xrpl_fee_reserve(&protocol.app, &xrpl.multisig_prover);
+
     let tx_id = HexTxHash::new([0; 32]);
     let amount = 500000000; // 500 XRP
 
@@ -739,6 +741,11 @@ fn can_add_reserves_to_xrpl_multisig() {
         xrpl_add_reserves_msg,
     );
 
+    assert_eq!(
+        test_utils::xrpl_fee_reserve(&protocol.app, &xrpl.multisig_prover),
+        initial_fee_reserve + amount
+    );
+
     // Advance the height to be able to distribute rewards
     test_utils::advance_height(
         &mut protocol.app,
@@ -776,6 +783,8 @@ fn interchain_transfer_towards_xrpl_can_be_verified_and_routed_and_proven() {
         verifiers,
         ..
     } = test_utils::setup_xrpl_destination_test_case();
+
+    let initial_fee_reserve = test_utils::xrpl_fee_reserve(&protocol.app, &xrpl.multisig_prover);
 
     test_utils::override_token_supply_for_chain(
         &mut protocol.app,
@@ -952,6 +961,9 @@ fn interchain_transfer_towards_xrpl_can_be_verified_and_routed_and_proven() {
             unsigned_tx_hash: proof.unsigned_tx_hash,
         },
     );
+
+    let final_fee_reserve = test_utils::xrpl_fee_reserve(&protocol.app, &xrpl.multisig_prover);
+    assert_eq!(final_fee_reserve, initial_fee_reserve - 10 * (32 + 1),);
 
     // Advance the height to be able to distribute rewards
     test_utils::advance_height(

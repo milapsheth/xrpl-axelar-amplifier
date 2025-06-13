@@ -218,6 +218,11 @@ fn save_next_verifier_set(
     Ok(())
 }
 
+pub fn update_fee_reserve(deps: DepsMut, new_fee_reserve: u64) -> Result<Response, ContractError> {
+    state::FEE_RESERVE.save(deps.storage, &new_fee_reserve)?;
+    Ok(Response::new())
+}
+
 pub fn update_signing_threshold(
     deps: DepsMut,
     new_signing_threshold: MajorityThreshold,

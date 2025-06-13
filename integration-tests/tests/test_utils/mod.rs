@@ -681,6 +681,14 @@ pub fn messages_from_xrpl_gateway(
     query_response.unwrap()
 }
 
+pub fn xrpl_fee_reserve(app: &AxelarApp, multisig_prover: &XRPLMultisigProverContract) -> u64 {
+    let query_response: Result<u64, StdError> =
+        multisig_prover.query(app, &xrpl_multisig_prover::msg::QueryMsg::FeeReserve);
+    assert!(query_response.is_ok());
+
+    query_response.unwrap()
+}
+
 pub fn proof(
     app: &mut AxelarApp,
     multisig_prover: &MultisigProverContract,
