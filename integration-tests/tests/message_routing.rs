@@ -689,6 +689,8 @@ fn can_add_reserves_to_xrpl_multisig() {
         ..
     } = test_utils::setup_xrpl_source_test_case();
 
+    let initial_fee_reserve = test_utils::xrpl_fee_reserve(&protocol.app, &xrpl.multisig_prover);
+
     let tx_id = HexTxHash::new([0; 32]);
     let amount = 500000000; // 500 XRP
 
@@ -737,6 +739,11 @@ fn can_add_reserves_to_xrpl_multisig() {
         &mut protocol.app,
         &xrpl.multisig_prover,
         xrpl_add_reserves_msg,
+    );
+
+    assert_eq!(
+        test_utils::xrpl_fee_reserve(&protocol.app, &xrpl.multisig_prover),
+        initial_fee_reserve + amount
     );
 
     // Advance the height to be able to distribute rewards
