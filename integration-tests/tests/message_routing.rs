@@ -963,6 +963,7 @@ fn interchain_transfer_towards_xrpl_can_be_verified_and_routed_and_proven() {
     );
 
     let final_fee_reserve = test_utils::xrpl_fee_reserve(&protocol.app, &xrpl.multisig_prover);
+    // tx fee is 10 drops * (32 signatories + 1)
     assert_eq!(final_fee_reserve, initial_fee_reserve - 10 * (32 + 1),);
 
     // Advance the height to be able to distribute rewards
