@@ -165,6 +165,7 @@ pub fn issue_payment(
         amount: amount.clone(),
         destination,
         cross_currency: cross_currency.cloned(),
+        cc_id: Some(cc_id.clone()),
     };
 
     issue_tx(storage, XRPLUnsignedTx::Payment(tx), Some(cc_id))
@@ -544,6 +545,7 @@ mod tests {
             amount: XRPLPaymentAmount::Drops(1000000),
             destination: "rKCwAJ38bkyzNZjfSZkLi5Q29U72nBmygw".parse().unwrap(),
             cross_currency: None,
+            cc_id: Some(cc_id.clone()),
         };
 
         TxInfo {
