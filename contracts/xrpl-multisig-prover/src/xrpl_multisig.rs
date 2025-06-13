@@ -98,7 +98,7 @@ fn ensure_sufficient_fee_reserve(
         SEQUENCE_NUMBER_MAX_OBJECT_COUNT.save(storage, &sequence_number, &tx_object_count)?;
 
         let unassigned_sequence_number = previous_max_object_count_opt.is_none();
-        if !unassigned_sequence_number {
+        if unassigned_sequence_number {
             let new_fee_reserve = current_reserve
                 .checked_sub(tx_fee)
                 .ok_or(ContractError::Underflow)?;
