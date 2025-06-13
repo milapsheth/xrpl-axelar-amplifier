@@ -155,6 +155,10 @@ pub enum ExecuteMsg {
     #[permission(Elevated)]
     TrustSet { token_id: TokenId },
 
+    // Override the current XRP fee reserve with a new value.
+    #[permission(Elevated)]
+    UpdateFeeReserve { new_fee_reserve: u64 },
+
     // Updates the signing threshold. The threshold currently in use does not change.
     // The verifier set must be updated and confirmed for the change to take effect.
     #[permission(Governance)]

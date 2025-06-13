@@ -115,6 +115,9 @@ pub fn execute(
         ExecuteMsg::TicketCreate => {
             execute::construct_ticket_create_proof(deps.storage, env.contract.address, &config)
         }
+        ExecuteMsg::UpdateFeeReserve { new_fee_reserve } => {
+            execute::update_fee_reserve(deps, new_fee_reserve)
+        }
         ExecuteMsg::UpdateSigningThreshold {
             new_signing_threshold,
         } => execute::update_signing_threshold(deps, new_signing_threshold),
