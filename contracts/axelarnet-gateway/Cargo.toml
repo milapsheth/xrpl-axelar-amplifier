@@ -5,10 +5,14 @@ rust-version = { workspace = true }
 edition = { workspace = true }
 description = "The Axelarnet Gateway contract allows apps on the Axelar Network to send/receive cross-chain messages to/from other chains."
 
-exclude = [
-    "contract.wasm",
-    "hash.txt"
-]
+exclude = ["contract.wasm", "hash.txt"]
+
+[package.metadata.scripts]
+optimize = """docker run --rm -v "$(pwd)":/code \
+  --mount type=volume,source="$(basename "$(pwd)")_cache",target=/code/target \
+  --mount type=volume,source=registry_cache,target=/usr/local/cargo/registry \
+  cosmwasm/optimizer:0.16.0
+"""
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -20,13 +24,6 @@ path = "src/bin/schema.rs"
 [features]
 # use library feature to disable all instantiate/execute/query exports
 library = []
-
-[package.metadata.scripts]
-optimize = """docker run --rm -v "$(pwd)":/code \
-  --mount type=volume,source="$(basename "$(pwd)")_cache",target=/code/target \
-  --mount type=volume,source=registry_cache,target=/usr/local/cargo/registry \
-  cosmwasm/optimizer:0.16.0
-"""
 
 [dependencies]
 axelar-core-std = { workspace = true }

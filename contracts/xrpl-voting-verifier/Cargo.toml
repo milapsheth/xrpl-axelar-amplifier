@@ -6,6 +6,13 @@ edition = { workspace = true }
 description = "XRPL voting verifier contract"
 
 exclude = ["hash.txt", "contract.wasm"]
+
+[package.metadata.scripts]
+optimize = """docker run --rm -v "$(pwd)":/code \
+  --mount type=volume,source="$(basename "$(pwd)")_cache",target=/code/target \
+  --mount type=volume,source=registry_cache,target=/usr/local/cargo/registry \
+  cosmwasm/optimizer:0.16.0
+"""
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
@@ -18,13 +25,6 @@ path = "src/bin/schema.rs"
 [features]
 # use library feature to disable all instantiate/execute/query exports
 library = []
-
-[package.metadata.scripts]
-optimize = """docker run --rm -v "$(pwd)":/code \
-  --mount type=volume,source="$(basename "$(pwd)")_cache",target=/code/target \
-  --mount type=volume,source=registry_cache,target=/usr/local/cargo/registry \
-  cosmwasm/optimizer:0.16.0
-"""
 
 [dependencies]
 assert_ok = { workspace = true }
@@ -49,7 +49,7 @@ thiserror = { workspace = true }
 xrpl-types = { workspace = true }
 
 [dev-dependencies]
-assert_ok ={ workspace = true }
+assert_ok = { workspace = true }
 cw-multi-test = "0.15.1"
 goldie = { workspace = true }
 integration-tests = { workspace = true }
